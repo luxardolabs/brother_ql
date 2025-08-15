@@ -82,7 +82,10 @@
     "total_height": null,
     "right_margin_dots": 0,
     "feed_margin": 35,
-    "restricted_to_models": ["QL-1050", "QL-1060N"]
+    "restricted_to_models": [
+      "QL-1050",
+      "QL-1060N"
+    ]
   },
   "17x54": {
     "name": "17mm x 54mm",
@@ -94,7 +97,7 @@
     "total_width": 201,
     "total_height": 636,
     "right_margin_dots": 0,
-    "feed_margin": 35
+    "feed_margin": 0
   },
   "17x87": {
     "name": "17mm x 87mm",
@@ -106,7 +109,7 @@
     "total_width": 201,
     "total_height": 1026,
     "right_margin_dots": 0,
-    "feed_margin": 35
+    "feed_margin": 0
   },
   "23x23": {
     "name": "23mm x 23mm square",
@@ -118,7 +121,7 @@
     "total_width": 272,
     "total_height": 272,
     "right_margin_dots": 42,
-    "feed_margin": 35,
+    "feed_margin": 0,
     "comment": "Testing shows ~300px actual printable width on QL-810W"
   },
   "23x23_fullbleed": {
@@ -131,7 +134,7 @@
     "total_width": 300,
     "total_height": 272,
     "right_margin_dots": 0,
-    "feed_margin": 35,
+    "feed_margin": 0,
     "comment": "Custom definition for full-bleed printing on QL-810W"
   },
   "29x42": {
@@ -144,7 +147,7 @@
     "total_width": 342,
     "total_height": 495,
     "right_margin_dots": 6,
-    "feed_margin": 35
+    "feed_margin": 0
   },
   "29x90": {
     "name": "29mm x 90mm",
@@ -156,7 +159,7 @@
     "total_width": 342,
     "total_height": 1061,
     "right_margin_dots": 6,
-    "feed_margin": 35
+    "feed_margin": 0
   },
   "39x90": {
     "name": "38mm x 90mm",
@@ -168,7 +171,7 @@
     "total_width": 449,
     "total_height": 1061,
     "right_margin_dots": 12,
-    "feed_margin": 35
+    "feed_margin": 0
   },
   "39x48": {
     "name": "39mm x 48mm",
@@ -180,7 +183,7 @@
     "total_width": 461,
     "total_height": 565,
     "right_margin_dots": 6,
-    "feed_margin": 35
+    "feed_margin": 0
   },
   "52x29": {
     "name": "52mm x 29mm",
@@ -192,7 +195,7 @@
     "total_width": 614,
     "total_height": 341,
     "right_margin_dots": 0,
-    "feed_margin": 35
+    "feed_margin": 0
   },
   "62x29": {
     "name": "62mm x 29mm",
@@ -204,7 +207,7 @@
     "total_width": 732,
     "total_height": 341,
     "right_margin_dots": 0,
-    "feed_margin": 35
+    "feed_margin": 0
   },
   "62x100": {
     "name": "62mm x 100mm",
@@ -216,7 +219,7 @@
     "total_width": 732,
     "total_height": 1179,
     "right_margin_dots": 0,
-    "feed_margin": 35
+    "feed_margin": 0
   },
   "102x51": {
     "name": "102mm x 51mm",
@@ -228,8 +231,11 @@
     "total_width": 1200,
     "total_height": 596,
     "right_margin_dots": 0,
-    "feed_margin": 35,
-    "restricted_to_models": ["QL-1050", "QL-1060N"]
+    "feed_margin": 0,
+    "restricted_to_models": [
+      "QL-1050",
+      "QL-1060N"
+    ]
   },
   "102x152": {
     "name": "102mm x 152mm",
@@ -241,8 +247,11 @@
     "total_width": 1200,
     "total_height": 1804,
     "right_margin_dots": 0,
-    "feed_margin": 35,
-    "restricted_to_models": ["QL-1050", "QL-1060N"]
+    "feed_margin": 0,
+    "restricted_to_models": [
+      "QL-1050",
+      "QL-1060N"
+    ]
   },
   "12d": {
     "name": "12mm round",
