@@ -1,0 +1,29 @@
+# Authors and Contributors
+
+## Original Project (brother_ql)
+
+### Primary Author
+- Philipp Klaus (@pklaus) - Original creator and maintainer (2016-2023)
+
+### Original Contributors
+The original brother_ql project had numerous contributors who helped with:
+- Protocol reverse engineering
+- Device support implementation
+- Bug fixes and improvements
+- Documentation
+
+For the full list of original contributors, see:
+https://github.com/pklaus/brother_ql/graphs/contributors
+
+## Modernization (2025)
+
+### Luxardo Labs
+- Complete Python 3.13+ modernization
+- Type hints implementation
+- Enum-based refactoring
+- Bug fixes and code cleanup
+- Removal of Python 2 compatibility
+
+## License
+
+All contributions are licensed under GPL-3.0-or-later as per the project license.
