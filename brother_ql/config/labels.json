@@ -253,7 +253,7 @@
       "QL-1060N"
     ]
   },
-  "12d": {
+  "d12": {
     "name": "12mm round",
     "width_mm": 12.0,
     "height_mm": 12.0,
@@ -265,7 +265,7 @@
     "right_margin_dots": 113,
     "feed_margin": 35
   },
-  "24d": {
+  "d24": {
     "name": "24mm round",
     "width_mm": 24.0,
     "height_mm": 24.0,
@@ -277,7 +277,7 @@
     "right_margin_dots": 0,
     "feed_margin": 35
   },
-  "58d": {
+  "d58": {
     "name": "58mm round",
     "width_mm": 58.0,
     "height_mm": 58.0,
