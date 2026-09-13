@@ -1,0 +1,14 @@
+{
+  "guard": "luxaudit",
+  "guard_version": "0.6.1",
+  "repo": "/repo",
+  "error": "no dependency source found (poetry.lock / requirements.txt / requirements/prod.txt / requirements/base.txt) \u2014 nothing to audit",
+  "not_audited": [],
+  "summary": {
+    "PASS": 0,
+    "FAIL": 0,
+    "XFAIL": 0
+  },
+  "commit": "3f9b59c7675a355643cfa58b15b7959b2340b7ac",
+  "generated_at": "2026-09-13T06:07:10Z"
+}
