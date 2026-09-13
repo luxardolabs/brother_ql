@@ -1,0 +1,47 @@
+# luxlint key — brother_ql's code-style + type facts. Committed, not hidden.
+#
+# luxlint owns the ruff/mypy/pytest CONFIG whole and byte-identical fleet-wide (it ships
+# inside the image). This file only says WHERE to look and WHAT is deferred. brother_ql's
+# old [tool.ruff] / [tool.mypy] / [tool.black] / [tool.pytest.ini_options] tables were
+# deleted from pyproject.toml on onboarding — carrying a local copy is precisely the drift
+# luxlint exists to kill (lint.no_local_ruff_config / types.no_local_mypy_config /
+# test.no_local_pytest_config).
+
+[source]
+# The library package. brother_ql is a LIBRARY, so the package lives under src/ per
+# --doc FLEET-LAYOUT-STANDARD; src/ is a path root, not part of the module path
+# (the import name is still `brother_ql`).
+#
+# SCOPE NOTE (owner's call — flagged, not silently widened): this lints the package only.
+# The fleet reference onboarding (luxof.life) uses paths = ["app", "tests"], i.e. it lints
+# test code too. Adding "tests" here is a one-line change and would widen ruff/format
+# coverage to the 7 files under tests/. It does NOT affect the test.* checks
+# (test.location / test.suite_exists are repo-wide, independent of [source].paths).
+paths = ["src/brother_ql"]
+
+[python]
+# brother_ql declares requires-python = ">=3.14" (pyproject.toml) and tests/builds on
+# python:3.14-slim (Makefile TAIL_IMAGE) — one version, agreeing everywhere, and the
+# fleet's (luxarch repo.python_version_consistent). The rule SET stays fleet-canonical;
+# this only sets what ruff/mypy check against. Move all three together, never one alone.
+target = "py314"
+
+# ── mypy honesty (luxlint --preflight) ──────────────────────────────────────────────
+# No [mypy.tail] attestations are needed here, and their absence is meaningful rather
+# than an omission:
+#   * pydantic — brother_ql does not use pydantic anywhere (deps are Pillow + packbits),
+#     so the emitted config injects no `plugins = pydantic.mypy` and there is no plugin
+#     for the run to fail to import.
+#   * overlay  — no [shared] is declared (no bind-mounted SSOT, no 0-byte placeholders),
+#     which IS the "no overlay" attestation; the shared-blind check stays silent.
+# The type leg is mount-only `luxlint --mypy` (`make mypy`). It replaced an in-repo tail
+# that pip-installed the package first; on the 0.52.1 canonical config at 3.14 both runs
+# report 0 errors over the same 11 source files, so nothing the tail resolved was lost.
+
+# POSTURE: reds stay RED and lit — the fleet does not gate CI on a red `make lint`.
+# Real drift is left red and tracked by a LuxPM ticket, NOT hidden behind
+# [rules.deferred]. There is intentionally NO [rules.deferred] block: it is the owner's
+# sparing per-rule dial with a mandatory evidence line, never the onboarding agent's
+# force-green. Align to the canonical standard (`make format` clears the mechanical
+# part) or escalate a genuinely-wrong rule to the maintainer — never a local ruff/mypy
+# config, never a blanket `# noqa`.

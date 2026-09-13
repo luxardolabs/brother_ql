@@ -1,0 +1,32 @@
+# luxarch — fleet architecture-conformance config for brother_ql.
+# Onboarded onto luxarch, pinned in the Makefile (LUXARCH_VERSION). The rules live in the
+# image, byte-identical fleet-wide; this key carries only brother_ql's own facts.
+#
+# POSTURE (per luxarch --doc ONBOARDING and --doc FLEET-ONBOARDING-STANDARD): reds stay RED
+# and lit — the fleet does NOT gate CI on a red `make arch`. Real drift is left red and
+# tracked by a LuxPM ticket, NOT hidden behind [rules.deferred]. There is intentionally NO
+# [rules.deferred] block here: it is the owner's sparing per-rule dial with a mandatory
+# evidence line, never the onboarding agent's force-green. Fix a red by aligning to the
+# standard, or escalate a genuinely-wrong guard to the maintainer — never route around it.
+
+# brother_ql is a LIBRARY, not an application: it is pip-installed and imported by other
+# code (it ships no service, no router, no ORM). Per --doc FLEET-LAYOUT-STANDARD that means
+# the package lives at src/<package>/, and pyproject.toml carries the matching
+# [tool.luxlayout] kind = "library" marker. The `library` rule pack is deliberately small —
+# layout, no test files inside the package, no bare except, no inline imports — because the
+# fastapi-web layering rules (Router → View → Core → CRUD) have no meaning here.
+[[target]]
+kind = "library"
+app  = "src/brother_ql"
+
+# The obs.* overlay applies to any kind, so leaving it off is a recorded decision, not a
+# default. It is an opt-out of rules that are not running, not a deferral of a red.
+[observability]
+exempt_reason = "library with no telemetry surface: it ships no service, route, or scheduled job, emits no traces or metrics, and neither src/brother_ql nor [project].dependencies references opentelemetry/prometheus/statsd — spans belong to the application that imports it"
+
+# No [shared] — brother_ql is a single self-contained package with no bind-mounted SSOT,
+# so there are no 0-byte placeholders to overlay. Not declaring [shared] IS the "no overlay"
+# attestation (see luxlint --doc ONBOARDING §3); the preflight check stays silent.
+#
+# No [enums] / [hypertables] / [uuid] / [tenant] / [components] / [importlinter] — all are
+# fastapi-web concerns and inert for kind = "library".

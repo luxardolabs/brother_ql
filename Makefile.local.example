@@ -1,0 +1,17 @@
+# Makefile.local.example — committed template for the gitignored Makefile.local.
+#
+# Copy to Makefile.local and fill in. Per FLEET-BUILD-DEPLOY-STANDARD
+# ("Per-repo Makefile convention"), EVERY site/internal value lives here rather than in
+# the committed Makefile — the universal rule, public or private, no per-repo branching.
+# That keeps the internal registry hostname out of git permanently, so this repo flipping
+# public later needs no scrub.
+#
+#     cp Makefile.local.example Makefile.local
+#
+# With LUX_REGISTRY unset, `make lint` / `make arch` / `make format` / `make test` skip
+# cleanly with a message instead of failing on an unreachable pull — so a clean clone
+# without registry access still has a working Makefile.
+
+# The private guard registry that hosts luxarch + luxlint.
+# (These images are private-registry only — they are never published to GHCR.)
+LUX_REGISTRY ?= docker.<your-private-registry>

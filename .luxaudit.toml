@@ -1,0 +1,18 @@
+# luxaudit — fleet dependency-vulnerability (SCA) config for brother_ql.
+# Pinned in the Makefile (LUXAUDIT_VERSION); the pinned pip-audit + the fleet ignore policy
+# live in the image, the advisory feed is fetched live on every run. Run via `make audit`
+# (folded into `make check`). See luxaudit --doc ONBOARDING / --doc REFERENCE.
+#
+# POSTURE: reds stay RED and lit. There is intentionally NO [[ignore]] block: a deferred
+# vulnerability is the owner's call with a written reason, never a route to green. Fix a
+# finding by raising the dependency (or declaring a floor for a transitive), or escalate.
+
+# [source] — NOT declared yet, and that is an open gap rather than an attestation.
+# brother_ql is a library: its dependencies are ranges in pyproject.toml
+# [project].dependencies, with no poetry.lock or requirements*.txt, so auto-detect finds
+# nothing and the scan reports `⚠ scan could not run` (exit 2). FLEET-ONBOARDING-STANDARD
+# §2.2 is explicit that a can't-scan is NOT onboarded. Which pinned dependency set to audit
+# is a dependency decision for the owner; once it exists, name it here:
+#
+#   [source]
+#   paths = ["requirements.txt"]

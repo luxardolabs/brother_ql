@@ -1,0 +1,102 @@
+# The fleet build backend (luxarch repo.hatchling_build_backend, FLEET-BUILD-DEPLOY-STANDARD).
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "brother_ql"
+dynamic = ["version"]
+description = "Python 3.14+ library for Brother QL label printers - Modernized by Luxardo Labs"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "GPL-3.0-or-later"
+authors = [
+    {name = "Philipp Klaus", email = "philipp.l.klaus@web.de"},
+    {name = "Luxardo Labs"},
+]
+maintainers = [
+    {name = "Luxardo Labs"},
+]
+keywords = [
+    "Brother", "QL-500", "QL-550", "QL-560", "QL-570", "QL-700",
+    "QL-710W", "QL-720NW", "QL-800", "QL-810W", "QL-820NWB",
+    "QL-1050", "QL-1060N", "label", "printer", "driver",
+    "Python3.14", "modernized", "type-hints", "enums"
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Topic :: System :: Hardware :: Hardware Drivers",
+    "Topic :: Printing",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "click>=8.0",
+    "packbits>=0.6",
+    "Pillow>=10.0",
+    "pyusb>=1.2.0",
+    "attrs>=22.0",
+]
+
+[project.urls]
+"Original Repository" = "https://github.com/pklaus/brother_ql"
+"Modernized Fork" = "https://github.com/luxardolabs/brother_ql"
+Homepage = "https://github.com/luxardolabs/brother_ql"
+Documentation = "https://github.com/luxardolabs/brother_ql"
+Repository = "https://github.com/luxardolabs/brother_ql"
+Issues = "https://github.com/luxardolabs/brother_ql/issues"
+
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "black>=23.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+    "types-Pillow",
+]
+
+# Fleet layout marker (luxarch `library.layout`, FLEET-LAYOUT-STANDARD): brother_ql is a
+# LIBRARY — pip-installed and imported by other code — so the package lives at
+# src/<package>/, not app/ at the root. src/ is a path root only; the import name is
+# unchanged (`import brother_ql`). The point of src/ is that tests and the mypy tail
+# resolve the INSTALLED artifact, never a stray repo-root directory.
+[tool.luxlayout]
+kind = "library"
+
+# The VERSION file is the one version literal (luxarch repo.version_single_source).
+# `pattern` is required, not decoration: hatchling's default regex looks for a
+# `__version__ = "…"` / `VERSION = "…"` assignment, so a bare `1.0.0` file fails the build
+# with "unable to parse the version from the file: VERSION" unless the whole line is taken.
+[tool.hatch.version]
+path = "VERSION"
+pattern = "(?P<version>.+)"
+
+# src-layout: the wheel ships the package directory, which carries its config/*.json data.
+[tool.hatch.build.targets.wheel]
+packages = ["src/brother_ql"]
+
+# The sdist ships the package + the files the build and the license need — no tests,
+# no repo tooling (the scope the old setuptools MANIFEST.in declared).
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/brother_ql",
+    "/VERSION",
+    "/README.md",
+    "/LICENSE",
+    "/NOTICE",
+    "/AUTHORS",
+]
+
+# NOTE — no [tool.ruff] / [tool.mypy] / [tool.pytest.ini_options] / [tool.black] here,
+# deliberately. luxlint owns those configs whole and byte-identical across the fleet
+# (they ship inside the luxlint image); a local copy is exactly the drift luxlint exists
+# to kill, and `lint.no_local_ruff_config` / `types.no_local_mypy_config` /
+# `test.no_local_pytest_config` flag it. Get the canonical config with
+# `docker run --rm $(LUXLINT_IMAGE) --emit-config {ruff,mypy,pytest}` — `make test`
+# does this for you; the emitted files are transient + gitignored.
