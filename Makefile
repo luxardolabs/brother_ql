@@ -43,9 +43,9 @@ LUX_REGISTRY ?=
 # trails the published :latest (it is the first step of `make check`), and
 # `make guard-upgrade` bumps every pin and prints what newly bites. Keep the `:=` form —
 # guard-upgrade's sed rewrites exactly these three lines.
-LUXARCH_VERSION  := 0.184.0
-LUXLINT_VERSION  := 0.54.0
-LUXAUDIT_VERSION := 0.7.0
+LUXARCH_VERSION  := 0.184.1
+LUXLINT_VERSION  := 0.55.0
+LUXAUDIT_VERSION := 0.8.1
 
 LUXARCH_IMAGE  ?= $(LUX_REGISTRY)/luxardolabs/luxarch:$(LUXARCH_VERSION)
 LUXLINT_IMAGE  ?= $(LUX_REGISTRY)/luxardolabs/luxlint:$(LUXLINT_VERSION)
@@ -105,6 +105,20 @@ arch: ## Architecture conformance via luxarch (pinned; mount-only; reads .luxarc
 audit: ## Dependency CVEs via luxaudit (pinned; mount-only; live advisory feed; reads .luxaudit.toml)
 	@$(SKIP_NO_REGISTRY); \
 	$(GUARD_RUN) $(LUXAUDIT_IMAGE)
+
+# The audit-only pinned set luxaudit scans (luxaudit --doc DEPENDENCY-DECLARATION, "A library
+# with dependency RANGES and no lockfile"). brother_ql ships ranges on purpose — pinning is
+# the consuming application's job — so this compiles today's resolution of those ranges.
+# A REPORTING artifact, never an install or deploy input. Rerun whenever
+# [project].dependencies changes: a stale compile is a stale audit.
+#
+# Runs as the repo owner (like format/build), so the compiled file is never root-owned;
+# HOME=/tmp gives the user-level uv install and its cache somewhere writable.
+audit-lock: ## Recompile requirements/audit.txt from the pyproject ranges (audit-only; rerun when deps change)
+	docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOME=/tmp -v $(PWD):/repo -w /repo $(TAIL_IMAGE) \
+	  sh -c 'pip install -q --user --root-user-action=ignore uv >/dev/null \
+	         && mkdir -p requirements \
+	         && python -m uv pip compile pyproject.toml -o requirements/audit.txt'
 
 # The canonical fixer (FLEET-ONBOARDING-STANDARD §2.1): ruff safe fixes + ruff format with
 # the CHECKED config, and mdformat-gfm for Markdown (GFM tables survive). It prints which
@@ -225,4 +239,4 @@ help: ## Show this help
 	  /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 	@echo
 
-.PHONY: check honest lint mypy arch audit format test gitleaks gitleaks-staged build status guard-version-check guard-upgrade help
+.PHONY: check honest lint mypy arch audit audit-lock format test gitleaks gitleaks-staged build status guard-version-check guard-upgrade help
