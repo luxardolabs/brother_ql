@@ -1,14 +1,17 @@
 {
   "guard": "luxaudit",
-  "guard_version": "0.7.0",
+  "guard_version": "0.8.1",
   "repo": "/repo",
-  "error": "no dependency source found (poetry.lock / requirements.txt / requirements/prod.txt / requirements/base.txt) \u2014 nothing to audit. If this repo genuinely has no Python dependencies, attest it: [python] deps = \"none\" + reason = \"\u2026\" in .luxaudit.toml (see --doc DEPENDENCY-DECLARATION).",
-  "not_audited": [],
+  "packages": 5,
+  "source": "audit.txt",
   "summary": {
-    "PASS": 0,
+    "PASS": 5,
     "FAIL": 0,
     "XFAIL": 0
   },
-  "commit": "5607e76fa8183813a5b73e099f156075a90ce00f",
-  "generated_at": "2026-09-15T03:14:39Z"
+  "vulnerable": [],
+  "deferred": [],
+  "not_audited": [],
+  "commit": "0d88a66fcc5dffd16656f7b6782b16213d819299",
+  "generated_at": "2026-09-15T04:15:26Z"
 }
