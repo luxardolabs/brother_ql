@@ -1,6 +1,6 @@
 {
   "guard": "luxarch",
-  "guard_version": "0.196.4",
+  "guard_version": "0.197.0",
   "repo": "/repo",
   "targets": [
     {
@@ -162,6 +162,24 @@
         "deferred": false,
         "inert": true,
         "inert_reason": "no `db-verify` target in a committed makefile \u2014 there is no migration-chain run to judge"
+      },
+      {
+        "rule": "repo.image_name_declares_provenance",
+        "status": "INERT",
+        "since": "0.197.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no committed makefile builds an image \u2014 there is no image provenance to judge"
+      },
+      {
+        "rule": "repo.deploy_tag_is_immutable",
+        "status": "INERT",
+        "since": "0.197.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no committed `.env*` pins a `TAG=` \u2014 nothing has declared what a stack runs"
       },
       {
         "rule": "repo.makefile_test_db_harness",
@@ -412,7 +430,7 @@
       "FAIL": 0,
       "XFAIL": 0,
       "XPASS": 0,
-      "INERT": 9
+      "INERT": 11
     }
   },
   "summary": {
@@ -420,8 +438,8 @@
     "FAIL": 0,
     "XFAIL": 0,
     "XPASS": 0,
-    "INERT": 9
+    "INERT": 11
   },
-  "commit": "62b40d5637566c6a8c816f784bced2377c180cf9",
-  "generated_at": "2026-09-24T14:18:26Z"
+  "commit": "a54c3a31a52cff323ef3fd752979f9c0cf3dd7f2",
+  "generated_at": "2026-09-24T14:27:31Z"
 }
