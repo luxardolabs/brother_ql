@@ -220,18 +220,21 @@ ping 192.168.1.100
 
 ## Configuration
 
-### JSON Files Location
+### Where Definitions Come From
 
-Configuration files are loaded from (first found wins):
+Label and printer definitions ship with the package (`brother_ql/config/*.json`). Nothing is read from your home directory or `/etc`, and nothing is read at import time — you extend the bundled set explicitly, in code or by naming files in an environment variable:
 
-1. `~/.brother_ql/labels.json` and `~/.brother_ql/models.json`
-1. `~/.config/brother_ql/labels.json` and `~/.config/brother_ql/models.json`
-1. `/etc/brother_ql/labels.json` and `/etc/brother_ql/models.json`
-1. Built-in `brother_ql/config/*.json`
+| How                                                 | Use it when                                                                                                           |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `BROTHER_QL_LABELS` / `BROTHER_QL_MODELS`           | you just want to drop in a JSON file, no code. Several paths allowed, separated like `PATH` and applied left to right |
+| `load_labels_from(path)` / `load_models_from(path)` | your application decides where its config lives                                                                       |
+| `register_label(spec)` / `register_model(spec)`     | you build a definition in code                                                                                        |
+
+Definitions merge **by identifier**: an entry changes only the fields it names, every other label and model stays available, and a later source wins over an earlier one. A malformed entry raises an error naming the file and the identifier rather than being skipped.
 
 ### Adding Custom Labels
 
-Create `~/.brother_ql/labels.json`:
+Create `my_labels.json`:
 
 ```json
 {
@@ -250,22 +253,28 @@ Create `~/.brother_ql/labels.json`:
 }
 ```
 
-Then use it:
+Then point the library at it, either with the environment variable:
+
+```sh
+export BROTHER_QL_LABELS=/path/to/my_labels.json
+```
+
+or from code:
 
 ```python
+from brother_ql.labels import load_labels_from
+
+load_labels_from('/path/to/my_labels.json')
 instructions = convert(qlr, [img], 'my_custom_50x30')
 ```
 
 ### Label Positioning Overrides
 
-If labels print off-center, add positioning overrides in `~/.brother_ql/models.json`:
+If labels print off-center, override the positioning for that model. Name only what changes — the model's other fields come from the bundled definition:
 
 ```json
 {
   "QL-810W": {
-    "name": "QL-810W",
-    "min_max_length_dots": [150, 11811],
-    "bytes_per_row": 90,
     "positioning": {
       "23x23": {
         "standard_position": 450,
@@ -277,6 +286,10 @@ If labels print off-center, add positioning overrides in `~/.brother_ql/models.j
     }
   }
 }
+```
+
+```sh
+export BROTHER_QL_MODELS=/path/to/my_models.json
 ```
 
 ## API Reference

@@ -2,20 +2,56 @@
 
 ## JSON Configuration
 
-The Brother QL library uses JSON files for all printer and label specifications, making it easy to add custom labels or adjust positioning without modifying code.
+The Brother QL library uses JSON files for all printer and label specifications, making it easy to add custom labels or adjust positioning without modifying code — or forking.
 
-### Configuration File Locations
+### How Definitions Are Loaded
 
-Configuration files are loaded from (first found wins):
+The definitions bundled in `brother_ql/config/*.json` are the starting point, and you layer your own over them. There is no directory scan: the library never reads `~/.brother_ql`, `~/.config` or `/etc`, so the same code behaves the same on a laptop, in CI and in production. Loading happens on first use, so importing `brother_ql` touches no files.
 
-1. `~/.brother_ql/labels.json` and `~/.brother_ql/models.json`
-1. `~/.config/brother_ql/labels.json` and `~/.config/brother_ql/models.json`
-1. `/etc/brother_ql/labels.json` and `/etc/brother_ql/models.json`
-1. Built-in `brother_ql/config/*.json`
+Three ways to add your own, all equivalent in effect:
+
+```sh
+# 1. No code. Several paths allowed, separated like PATH, applied left to right.
+export BROTHER_QL_LABELS=/srv/labels.json
+export BROTHER_QL_MODELS=/srv/models.json
+```
+
+```python
+# 2. Your application picks the path.
+from brother_ql.labels import load_labels_from
+from brother_ql.models import load_models_from
+
+load_labels_from('/srv/labels.json')
+load_models_from('/srv/models.json')
+```
+
+```python
+# 3. Built in code, no file at all.
+from brother_ql.labels import LabelKind, LabelSpec, register_label
+
+register_label(LabelSpec(
+    identifier='my_custom_50x30',
+    name='50mm x 30mm Custom',
+    width_mm=50.0,
+    height_mm=30.0,
+    kind=LabelKind.DIE_CUT,
+    printable_width=554,
+    printable_height=271,
+    total_width=590,
+    total_height=306,
+))
+```
+
+Rules that apply to all three:
+
+- **Merging is by identifier.** An entry overrides only the fields it names; everything else on that label or model comes from the bundled definition, and definitions you never mention stay available.
+- **Later wins.** Bundled, then each env-named file left to right, then explicit `load_*_from` / `register_*` calls.
+- **Mistakes are loud.** A malformed entry raises an error naming the file and the identifier; a path that does not exist is an error, not a silent skip. Neither is swallowed, because a skipped definition resurfaces much later as a confusing "Unknown label identifier".
+- `all_labels()` / `all_models()` return the current sets; `reset_labels()` / `reset_models()` discard runtime additions (useful in tests).
 
 ### Adding Custom Labels
 
-Create `~/.brother_ql/labels.json`:
+Create a `labels.json` anywhere you like:
 
 ```json
 {
@@ -36,16 +72,11 @@ Create `~/.brother_ql/labels.json`:
 
 ### Fixing Label Positioning
 
-If your labels print off-center, you can add positioning overrides without modifying the library.
-
-Create `~/.brother_ql/models.json`:
+If your labels print off-center, you can add positioning overrides without modifying the library. Because merging is per identifier, the override names only `positioning` — dimensions and capabilities stay as bundled:
 
 ```json
 {
   "QL-810W": {
-    "name": "QL-810W",
-    "min_max_length_dots": [150, 11811],
-    "bytes_per_row": 90,
     "positioning": {
       "23x23": {
         "standard_position": 450,
