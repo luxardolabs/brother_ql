@@ -1,9 +1,9 @@
 {
   "guard": "luxaudit",
-  "guard_version": "0.8.1",
+  "guard_version": "0.9.0",
   "repo": "/repo",
   "packages": 5,
-  "source": "audit.txt",
+  "source": "requirements/audit.txt",
   "summary": {
     "PASS": 5,
     "FAIL": 0,
@@ -12,6 +12,6 @@
   "vulnerable": [],
   "deferred": [],
   "not_audited": [],
-  "commit": "0d88a66fcc5dffd16656f7b6782b16213d819299",
-  "generated_at": "2026-09-15T04:15:26Z"
+  "commit": "8584503359c98b0e60b0ab9be6bddf8fb282ce87",
+  "generated_at": "2026-09-24T13:44:24Z"
 }

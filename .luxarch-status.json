@@ -1,6 +1,6 @@
 {
   "guard": "luxarch",
-  "guard_version": "0.184.1",
+  "guard_version": "0.196.4",
   "repo": "/repo",
   "targets": [
     {
@@ -120,12 +120,48 @@
       },
       {
         "rule": "repo.makefile_canonical",
-        "status": "PASS",
+        "status": "INERT",
         "since": "0.96.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "not an app-kind target \u2014 the canonical `check` composition is app-only, so this target's gate shape was never evaluated. Recipe safety is checked for every kind by repo.makefile_no_command_substitution."
+      },
+      {
+        "rule": "repo.makefile_no_command_substitution",
+        "status": "PASS",
+        "since": "0.185.0",
         "violations": 0,
         "deferred": false,
         "inert": false,
         "inert_reason": ""
+      },
+      {
+        "rule": "repo.guard_pins_not_overridable",
+        "status": "PASS",
+        "since": "0.187.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": false,
+        "inert_reason": ""
+      },
+      {
+        "rule": "repo.guard_upgrade_verifies_write",
+        "status": "PASS",
+        "since": "0.192.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": false,
+        "inert_reason": ""
+      },
+      {
+        "rule": "repo.db_verify_image_is_current",
+        "status": "INERT",
+        "since": "0.196.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no `db-verify` target in a committed makefile \u2014 there is no migration-chain run to judge"
       },
       {
         "rule": "repo.makefile_test_db_harness",
@@ -255,12 +291,12 @@
       },
       {
         "rule": "repo.shared_buildx_builder",
-        "status": "PASS",
+        "status": "INERT",
         "since": "0.42.0",
         "violations": 0,
         "deferred": false,
-        "inert": false,
-        "inert_reason": ""
+        "inert": true,
+        "inert_reason": "no buildx recipe in a committed makefile \u2014 this repo builds with plain `docker build`, so there is no builder setup to judge. It cannot orphan a builder, and it also does nothing the rule asks for; adopting `--emit buildx-setup` here would ADD the builder-creation the rule exists to make safe, so do not adopt it to turn this line green."
       },
       {
         "rule": "repo.compose_project_name",
@@ -300,12 +336,21 @@
       },
       {
         "rule": "repo.buildx_builder_gc_capped",
-        "status": "PASS",
+        "status": "INERT",
         "since": "0.46.0",
         "violations": 0,
         "deferred": false,
-        "inert": false,
-        "inert_reason": ""
+        "inert": true,
+        "inert_reason": "no buildx recipe in a committed makefile \u2014 this repo builds with plain `docker build`, so there is no builder setup to judge. It cannot orphan a builder, and it also does nothing the rule asks for; adopting `--emit buildx-setup` here would ADD the builder-creation the rule exists to make safe, so do not adopt it to turn this line green."
+      },
+      {
+        "rule": "repo.buildx_strays_refused",
+        "status": "INERT",
+        "since": "0.193.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no buildx recipe in a committed makefile \u2014 this repo builds with plain `docker build`, so there is no builder setup to judge. It cannot orphan a builder, and it also does nothing the rule asks for; adopting `--emit buildx-setup` here would ADD the builder-creation the rule exists to make safe, so do not adopt it to turn this line green."
       },
       {
         "rule": "repo.version_single_source",
@@ -367,7 +412,7 @@
       "FAIL": 0,
       "XFAIL": 0,
       "XPASS": 0,
-      "INERT": 4
+      "INERT": 9
     }
   },
   "summary": {
@@ -375,8 +420,8 @@
     "FAIL": 0,
     "XFAIL": 0,
     "XPASS": 0,
-    "INERT": 4
+    "INERT": 9
   },
-  "commit": "0d88a66fcc5dffd16656f7b6782b16213d819299",
-  "generated_at": "2026-09-15T04:15:26Z"
+  "commit": "8584503359c98b0e60b0ab9be6bddf8fb282ce87",
+  "generated_at": "2026-09-24T13:44:24Z"
 }
