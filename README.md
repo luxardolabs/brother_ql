@@ -232,6 +232,8 @@ Label and printer definitions ship with the package (`brother_ql/config/*.json`)
 
 Definitions merge **by identifier**: an entry changes only the fields it names, every other label and model stays available, and a later source wins over an earlier one. A malformed entry raises an error naming the file and the identifier rather than being skipped.
 
+The `brother-ql` command adds a fourth way, for people rather than programs: it reads the conventional per-machine files and hands them to the library. See [Command Line](#command-line).
+
 ### Adding Custom Labels
 
 Create `my_labels.json`:
@@ -291,6 +293,38 @@ If labels print off-center, override the positioning for that model. Name only w
 ```sh
 export BROTHER_QL_MODELS=/path/to/my_models.json
 ```
+
+## Command Line
+
+Installing the package provides `brother-ql`:
+
+```sh
+brother-ql labels                 # list label definitions
+brother-ql labels --model QL-810W # only those usable on that model
+brother-ql models                 # list printer models and their capabilities
+brother-ql config                 # what config was searched for and loaded
+brother-ql convert label.png --model QL-810W --label 62x29 -o out.bin
+```
+
+`convert` writes raster instructions as bytes; sending them to a printer stays your call (see [Sending to Printer](#sending-to-printer)). Use `-o -` to write to stdout.
+
+### Per-machine configuration
+
+The library itself never searches the filesystem. The CLI does, reading these if present, lowest precedence first:
+
+1. `/etc/brother_ql/labels.json` and `models.json`
+1. `$XDG_CONFIG_HOME/brother_ql/…` (default `~/.config/brother_ql/…`)
+1. `~/.brother_ql/…` (legacy location)
+1. anything named with `--labels` / `--models`, left to right
+
+So a custom label lives in `~/.brother_ql/labels.json` and is picked up by every `brother-ql` run, while a program using the library gets nothing it did not ask for. `--no-user-config` ignores the discovered files, which is what a reproducible run wants:
+
+```sh
+brother-ql --no-user-config labels
+brother-ql --labels ./ci-labels.json convert label.png --model QL-810W --label my50x30 -o out.bin
+```
+
+`brother-ql config` is the first thing to run when a custom label "isn't there" — it prints every path searched, what was loaded, the environment variables, and the resulting counts.
 
 ## API Reference
 

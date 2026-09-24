@@ -49,6 +49,15 @@ Rules that apply to all three:
 - **Mistakes are loud.** A malformed entry raises an error naming the file and the identifier; a path that does not exist is an error, not a silent skip. Neither is swallowed, because a skipped definition resurfaces much later as a confusing "Unknown label identifier".
 - `all_labels()` / `all_models()` return the current sets; `reset_labels()` / `reset_models()` discard runtime additions (useful in tests).
 
+### Why the library does not read `~/.brother_ql` — and the CLI does
+
+Config discovery is a property of an *application*, not a library. A library that reads `$HOME` at import behaves differently on two machines running identical code, can fail to import because of a file nobody remembers writing, and lets an ambient file change what physically prints. So the split is:
+
+- **`brother_ql` the library**: bundled definitions, plus exactly what the caller passes in.
+- **`brother-ql` the CLI**: reads `/etc/brother_ql/`, `$XDG_CONFIG_HOME/brother_ql/` and `~/.brother_ql/` (lowest precedence first), then `--labels` / `--models`, and hands each file to the loaders above.
+
+That keeps the drop-in-a-JSON workflow for people using the command, while a service importing the library stays deterministic. `brother-ql config` prints what was searched and loaded; `brother-ql --no-user-config` ignores the machine's files entirely.
+
 ### Adding Custom Labels
 
 Create a `labels.json` anywhere you like:

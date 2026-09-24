@@ -51,6 +51,9 @@ Repository = "https://github.com/luxardolabs/brother_ql"
 Issues = "https://github.com/luxardolabs/brother_ql/issues"
 
 
+[project.scripts]
+brother-ql = "brother_ql.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
