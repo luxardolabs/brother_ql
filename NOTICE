@@ -21,7 +21,7 @@ License: GPL-3.0-or-later (same as original)
 Major Changes in This Fork:
 ----------------------------
 1. COMPLETE MODERNIZATION
-   - Python 3.13+ only (removed all Python 2 compatibility)
+   - Python 3.14+ only (removed all Python 2 compatibility)
    - Full type hints and mypy compliance
    - Modern Python patterns throughout
 

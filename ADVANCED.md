@@ -6,7 +6,7 @@ The Brother QL library uses JSON files for all printer and label specifications,
 
 ### How Definitions Are Loaded
 
-The definitions bundled in `brother_ql/config/*.json` are the starting point, and you layer your own over them. There is no directory scan: the library never reads `~/.brother_ql`, `~/.config` or `/etc`, so the same code behaves the same on a laptop, in CI and in production. Loading happens on first use, so importing `brother_ql` touches no files.
+The definitions bundled with the package (`src/brother_ql/config/*.json` in this repository) are the starting point, and you layer your own over them. There is no directory scan: the library never reads `~/.brother_ql`, `~/.config` or `/etc`, so the same code behaves the same on a laptop, in CI and in production. Loading happens on first use, so importing `brother_ql` touches no files.
 
 Three ways to add your own, all equivalent in effect:
 

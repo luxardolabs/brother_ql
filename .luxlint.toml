@@ -12,10 +12,10 @@
 # --doc FLEET-LAYOUT-STANDARD; src/ is a path root, not part of the module path
 # (the import name is still `brother_ql`).
 #
-# SCOPE NOTE (owner's call — flagged, not silently widened): this lints the package only.
-# The fleet reference onboarding (luxof.life) uses paths = ["app", "tests"], i.e. it lints
-# test code too. Adding "tests" here is a one-line change and would widen ruff/format
-# coverage to the 7 files under tests/. It does NOT affect the test.* checks
+# SCOPE NOTE: this names the package; luxlint resolves the test dirs on its own, so ruff
+# and `--format` already cover the 9 files under tests/ ("src/brother_ql + resolved test
+# dirs" in its output — a B018 in tests/test_config_overrides.py reds `lint.ruff`). The
+# mypy leg is narrower: it type-checks the package only. Neither affects the test.* checks
 # (test.location / test.suite_exists are repo-wide, independent of [source].paths).
 paths = ["src/brother_ql"]
 

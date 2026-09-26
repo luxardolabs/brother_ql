@@ -10,20 +10,22 @@ A clean, modern Python library for Brother QL series label printers. Pure Python
 - 🖼️ **Image Processing** - Dithering, rotation, positioning
 - 🏷️ **Many Label Sizes** - Die-cut and endless labels supported
 - 🎨 **Red/Black Printing** - For compatible models (QL-8xx series)
-- 🚀 **Minimal Dependencies** - Just PIL/Pillow for images
+- 🚀 **Few Dependencies** - Pillow and packbits for imaging, click for the CLI
 - 🔒 **Security Audited** - No shell execution, network code, or eval
 
 ## Installation
 
+This fork is **not published to PyPI**. `pip install brother-ql` fetches the original [pklaus/brother_ql](https://pypi.org/project/brother-ql/) (0.9.4) — a different library with a different API. Install this one from the repository:
+
 ```bash
-pip install brother-ql
+pip install 'brother_ql @ git+https://github.com/luxardolabs/brother_ql.git@v2.0.0'
 ```
 
-Or install from source:
+Or from source:
 
 ```bash
-git clone https://github.com/luxardolabs/brother-ql.git
-cd brother-ql
+git clone https://github.com/luxardolabs/brother_ql.git
+cd brother_ql
 pip install -e .
 ```
 
@@ -81,7 +83,7 @@ Common label sizes (width x height in mm):
 | `62`     | 62mm endless | Continuous       | 696×variable     |
 | `29`     | 29mm endless | Continuous       | 306×variable     |
 
-See all labels: `brother_ql/config/labels.json`
+See all labels: run `brother-ql labels`, or read `src/brother_ql/config/labels.json`.
 
 ### Printer Models
 
@@ -330,10 +332,10 @@ brother-ql --labels ./ci-labels.json convert label.png --model QL-810W --label m
 
 Versions follow [SemVer](https://semver.org/); [`CHANGELOG.md`](CHANGELOG.md) holds what changed, and each release is tagged `v<version>` with matching notes on the [releases page](https://github.com/luxardolabs/brother_ql/releases).
 
-Pin a version the usual way:
+Pin a version by tag (this fork is not on PyPI — see [Installation](#installation)):
 
 ```sh
-pip install 'brother-ql==2.0.0'
+pip install 'brother_ql @ git+https://github.com/luxardolabs/brother_ql.git@v2.0.0'
 ```
 
 **Upgrading from 1.0.0** — it requires Python 3.14+, and the library no longer searches `~/.brother_ql`, `~/.config/brother_ql` or `/etc/brother_ql` (those paths were documented but never actually reachable). Use the `brother-ql` command, which does read them, or load your file explicitly. See [Configuration](#configuration) and the changelog's Breaking section.
@@ -383,7 +385,7 @@ label = get_label('62x29')
 print(f"Size: {label.printable_width}x{label.printable_height} pixels")
 ```
 
-#### `get_model(identifier: str) -> PrinterModel`
+#### `get_model(identifier: str) -> PrinterModel | None`
 
 Get printer model specification.
 
@@ -393,6 +395,32 @@ from brother_ql.models import get_model
 model = get_model('QL-810W')
 print(f"Supports red: {model.has_two_color}")
 ```
+
+### Extending the Definitions
+
+Merged by identifier, so an entry overrides only the fields it names. See [Configuration](#configuration).
+
+#### `load_labels_from(path)` / `load_models_from(path)`
+
+Merge a JSON file over the current set.
+
+```python
+from brother_ql.labels import load_labels_from
+
+load_labels_from('/srv/my_labels.json')
+```
+
+#### `register_label(spec)` / `register_model(spec)`
+
+Add or replace one definition built in code.
+
+#### `all_labels()` / `all_models()`
+
+The current sets, keyed by identifier (a copy).
+
+#### `reset_labels()` / `reset_models()`
+
+Discard runtime additions; the next lookup reloads the bundled definitions plus anything named by `BROTHER_QL_LABELS` / `BROTHER_QL_MODELS`. Useful in tests.
 
 ## Examples
 
@@ -545,7 +573,7 @@ sudo usermod -a -G lp $USER
 
 ### Labels Print Off-Center
 
-Add positioning override in `~/.brother_ql/models.json` (see Configuration above).
+Add a positioning override for that model. The `brother-ql` command reads `~/.brother_ql/models.json`; from code, load the file explicitly with `load_models_from()` (see [Configuration](#configuration)).
 
 ### Poor Image Quality
 

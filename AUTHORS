@@ -18,7 +18,7 @@ https://github.com/pklaus/brother_ql/graphs/contributors
 ## Modernization (2025)
 
 ### Luxardo Labs
-- Complete Python 3.13+ modernization
+- Complete Python 3.14+ modernization
 - Type hints implementation
 - Enum-based refactoring
 - Bug fixes and code cleanup
