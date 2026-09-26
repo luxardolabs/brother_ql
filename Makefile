@@ -14,11 +14,12 @@
 # gitignored and is NEVER how a check passes.
 #
 # brother_ql is a LIBRARY, not a deployed application: it is pip-installed and imported,
-# it ships no service and no container image. So this Makefile deliberately carries NO
-# deploy targets (dev-build-push, release, prod-sync, prod-deploy). Its single version
-# source of truth is the VERSION file: pyproject reads it via hatchling
-# ([tool.hatch.version]) and `brother_ql.__version__` derives it from the installed
-# metadata — no other file carries the literal (luxarch repo.version_single_source).
+# it ships no service and no container image. So this Makefile carries NO deploy targets
+# (dev-build-push, prod-sync, prod-deploy), and `release` is the LIBRARY ritual — tag,
+# artifacts, GitHub Release — not an image build+deploy. Its single version source of
+# truth is the VERSION file: pyproject reads it via hatchling ([tool.hatch.version]) and
+# `brother_ql.__version__` derives it from the installed metadata — no other file carries
+# the literal (luxarch repo.version_single_source).
 # =============================================================================
 
 .DEFAULT_GOAL := help
@@ -43,7 +44,7 @@ LUX_REGISTRY ?=
 # trails the published :latest (it is the first step of `make check`), and
 # `make guard-upgrade` bumps every pin and prints what newly bites. Keep the `:=` form —
 # guard-upgrade's sed rewrites exactly these three lines.
-LUXARCH_VERSION  := 0.197.0
+LUXARCH_VERSION  := 0.199.0
 LUXLINT_VERSION  := 0.55.0
 LUXAUDIT_VERSION := 0.9.0
 
@@ -179,6 +180,32 @@ gitleaks-staged: ## Pre-commit scan of STAGED changes (the pre-commit hook runs 
 	rm -f .luxlint.gitleaks.toml; \
 	exit $$rc
 
+##@ Release
+
+# brother_ql is a LIBRARY, so it releases the library way (luxarch --doc
+# FLEET-RELEASE-PROCESS's carve-out, --doc FLEET-BUILD-DEPLOY-STANDARD "Version scheme"):
+# SemVer in the VERSION file, a root CHANGELOG.md holding the content, an annotated
+# v$(VERSION) tag, and a GitHub Release carrying that version's notes. A release is a TAG
+# PLUS A RELEASE OBJECT — a bare tag leaves /releases empty and the notes unused. The
+# ordered ritual (including the LuxPM mirror) is .claude/skills/release/SKILL.md.
+RELEASE_VERSION := $(shell cat VERSION 2>/dev/null)
+
+release: ## Tag, push, build and publish the GitHub Release for the VERSION file's version
+	@set -e; \
+	[ -n "$(RELEASE_VERSION)" ] || { echo "release: VERSION is empty"; exit 1; }; \
+	[ -z "$$(git status --porcelain)" ] || { echo "release: working tree is dirty — commit first"; exit 1; }; \
+	grep -q "^## $(RELEASE_VERSION) " CHANGELOG.md || { echo "release: CHANGELOG.md has no '## $(RELEASE_VERSION)' section"; exit 1; }; \
+	git rev-parse -q --verify refs/tags/v$(RELEASE_VERSION) >/dev/null && { echo "release: tag v$(RELEASE_VERSION) already exists"; exit 1; }; \
+	$(MAKE) --no-print-directory check; \
+	rm -rf dist; $(MAKE) --no-print-directory build; \
+	awk '/^## $(RELEASE_VERSION) /{f=1;next} /^## /{f=0} f' CHANGELOG.md > .release-notes.md; \
+	git tag -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)"; \
+	git push origin HEAD; \
+	git push origin v$(RELEASE_VERSION); \
+	gh release create v$(RELEASE_VERSION) --title "$(RELEASE_VERSION)" --notes-file .release-notes.md dist/*; \
+	rm -f .release-notes.md; \
+	echo "released v$(RELEASE_VERSION) — now mirror it to LuxPM (see .claude/skills/release/SKILL.md)"
+
 ##@ Build
 
 build: ## Build the sdist + wheel in Docker (hatchling; version from VERSION)
@@ -239,4 +266,4 @@ help: ## Show this help
 	  /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 	@echo
 
-.PHONY: check honest lint mypy arch audit audit-lock format test gitleaks gitleaks-staged build status guard-version-check guard-upgrade help
+.PHONY: check honest lint mypy arch audit audit-lock format test gitleaks gitleaks-staged release build status guard-version-check guard-upgrade help

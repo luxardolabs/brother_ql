@@ -326,6 +326,18 @@ brother-ql --labels ./ci-labels.json convert label.png --model QL-810W --label m
 
 `brother-ql config` is the first thing to run when a custom label "isn't there" — it prints every path searched, what was loaded, the environment variables, and the resulting counts.
 
+## Releases
+
+Versions follow [SemVer](https://semver.org/); [`CHANGELOG.md`](CHANGELOG.md) holds what changed, and each release is tagged `v<version>` with matching notes on the [releases page](https://github.com/luxardolabs/brother_ql/releases).
+
+Pin a version the usual way:
+
+```sh
+pip install 'brother-ql==2.0.0'
+```
+
+**Upgrading from 1.0.0** — it requires Python 3.14+, and the library no longer searches `~/.brother_ql`, `~/.config/brother_ql` or `/etc/brother_ql` (those paths were documented but never actually reachable). Use the `brother-ql` command, which does read them, or load your file explicitly. See [Configuration](#configuration) and the changelog's Breaking section.
+
 ## API Reference
 
 ### Core Functions
