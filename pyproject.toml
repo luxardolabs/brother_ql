@@ -88,6 +88,8 @@ include = [
     "/src/brother_ql",
     "/VERSION",
     "/README.md",
+    "/CHANGELOG.md",
+    "/docs",
     "/LICENSE",
     "/NOTICE",
     "/AUTHORS",
