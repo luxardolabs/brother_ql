@@ -507,58 +507,61 @@ with open('/dev/usb/lp0', 'wb') as printer:
 
 ### Running Tests
 
+Everything runs in Docker — there is no local virtualenv to set up, and nothing here is installed on the host:
+
 ```bash
-# Install test dependencies
-pip install pytest
-
-# Run all tests
-pytest tests/
-
-# Run with verbose output
-pytest tests/ -v
-
-# Run specific test file
-pytest tests/test_conversion.py
+make test     # pytest against the INSTALLED package, with the canonical config
+make check    # the full gate: lint, types, tests, architecture, dependencies, secrets
 ```
+
+`make test` installs the built package into a throwaway container before running, so the suite exercises the artifact a user would get, not the working tree. Running `pytest` directly will not work: the canonical config requires pytest-asyncio, and the tests import `brother_ql` as an installed package.
 
 ### Test Coverage
 
-The test suite includes:
+The suite (73 tests across 9 files) covers:
 
-- **Conversion tests** - Image to raster conversion with various options
-- **Label tests** - Label loading and specifications
-- **Model tests** - Printer model capabilities
-- **Raster tests** - Low-level raster generation
-- **Image processing tests** - Dithering, rotation, resizing
-- **Positioning tests** - Label alignment and centering
+- **Conversion** - image to raster with various options
+- **Labels / Models** - loading, specifications, capabilities
+- **Raster** - low-level instruction generation
+- **Image processing** - dithering, rotation, resizing, red/black separation
+- **Positioning** - label alignment and centering
+- **Config overrides** - precedence, partial overrides, malformed input
+- **CLI** - discovery, flags, `config` output, convert
+- **Print path** - end-to-end byte generation
 
 All tests should pass before submitting pull requests.
 
 ## Architecture
 
+The package lives under `src/` so tests and type-checking resolve the *installed* artifact rather than the working tree:
+
 ```
-brother_ql/
-├── __init__.py           # Package exports
+src/brother_ql/
+├── __init__.py           # Package exports, __version__ from installed metadata
+├── cli.py               # The brother-ql command (and all config discovery)
 ├── conversion.py         # Main convert() function
 ├── raster.py            # BrotherQLRaster class
 ├── image_processing.py   # Image manipulation
 ├── label_positioning.py  # Label alignment
-├── labels.py            # Label specifications
-├── models.py            # Printer models
+├── labels.py            # Label specifications + extension API
+├── models.py            # Printer models + extension API
 ├── constants.py         # Shared constants
 ├── enums.py             # Enumerations
 ├── exceptions.py        # Error types
 └── config/
-    ├── labels.json      # Label definitions
-    └── models.json      # Printer definitions
+    ├── labels.json      # Bundled label definitions
+    └── models.json      # Bundled printer definitions
 
 tests/
-├── test_conversion.py    # Conversion tests
-├── test_labels.py       # Label tests
-├── test_models.py       # Model tests
-├── test_raster.py       # Raster tests
-├── test_image_processing.py  # Image tests
-└── test_label_positioning.py # Positioning tests
+├── test_cli.py                 # CLI behaviour and config discovery
+├── test_config_overrides.py    # Merge precedence and partial overrides
+├── test_conversion.py          # Conversion tests
+├── test_image_processing.py    # Image tests
+├── test_label_positioning.py   # Positioning tests
+├── test_labels.py              # Label tests
+├── test_models.py              # Model tests
+├── test_print_now.py           # End-to-end byte generation
+└── test_raster.py              # Raster tests
 ```
 
 ## Troubleshooting
@@ -594,7 +597,8 @@ Contributions welcome! Please:
 1. Fork the repository
 1. Create a feature branch
 1. Add tests for new functionality
-1. Run `pytest tests/` to ensure all tests pass
+1. Run `make check` — the full gate (lint, types, tests, architecture, dependencies, secrets), all in Docker
+1. Run `make format` before committing; it applies the canonical formatter
 1. Submit a pull request
 
 ## License
