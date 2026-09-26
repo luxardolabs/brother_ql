@@ -47,7 +47,7 @@ Fleet-guard onboarding, and the config-override feature finally does what the do
 - **Upgrading from 1.0.0:** if you relied on a config file in `~/.brother_ql/` (it would not have been read), either use the `brother-ql` CLI, which reads that exact path, or call `load_labels_from()` / `load_models_from()`, or set `BROTHER_QL_LABELS` / `BROTHER_QL_MODELS`. Partial overrides now merge instead of replacing the set.
 - **Not on PyPI, by choice.** `pip install brother-ql` fetches the original pklaus library (0.9.4), not this fork. Install from the repository: `pip install 'brother_ql @ git+https://github.com/luxardolabs/brother_ql.git@v2.0.0'`, or from the sdist/wheel attached to the release — those artifacts are the distribution channel.
 - Guard escalations raised from this repo and fixed upstream: BROTHERQL-2, -3, -4 (luxarch 0.184.0), -13 (0.185.0), -5 (luxaudit 0.8.0), -12 (luxlint 0.55.0).
-- `make check` is green at this release: lint 18/0 (3 N/A), mypy 0, 73 tests, arch 34/0 (11 N/A), audit 5 packages 0 vulnerable, gitleaks clean. No `## Known reds`.
+- `make check` is green at this release: lint 18/0 (3 N/A), mypy 0, 73 tests, arch 34/0 (11 N/A), audit 3 packages 0 vulnerable, gitleaks clean. No `## Known reds`.
 
 ## 1.0.0 — 2025-11-14
 
