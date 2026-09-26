@@ -55,15 +55,11 @@ Issues = "https://github.com/luxardolabs/brother_ql/issues"
 [project.scripts]
 brother-ql = "brother_ql.cli:main"
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-    "pytest-cov",
-    "black>=23.0",
-    "ruff>=0.1.0",
-    "mypy>=1.0",
-    "types-Pillow",
-]
+# No [project.optional-dependencies]. There is no host toolchain to declare: ruff, mypy
+# and pytest come from the pinned guard images and run in Docker (`make lint` / `mypy` /
+# `test`), never from a local install — the Makefile's HARD RULE. The old `dev` extra
+# listed black (superseded by the canonical ruff formatter), ruff, mypy, pytest,
+# pytest-cov and types-Pillow, none of which anything installed or used.
 
 # Fleet layout marker (luxarch `library.layout`, FLEET-LAYOUT-STANDARD): brother_ql is a
 # LIBRARY — pip-installed and imported by other code — so the package lives at

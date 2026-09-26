@@ -15,6 +15,7 @@ Fleet-guard onboarding, and the config-override feature finally does what the do
 - **A malformed label/model entry raises `ValueError`** naming the file and identifier, instead of being logged and skipped. A skipped definition resurfaced later as a misleading "Unknown label identifier".
 - **`load_image()` returns a decoded copy** rather than a lazily-opened image, so the file handle is closed before it returns.
 - **`brother_ql.backends` is gone.** It was an empty module — a docstring claiming "backwards compatibility for code that used the old backend system" over no code at all, so `from brother_ql.backends import …` failed anyway. Upstream's transport layer (pyusb / network / linux_kernel) is not part of this fork by design: the library returns raster instructions as bytes and you send them, per "Sending to Printer" in the README.
+- **The `dev` extra is gone.** `pip install brother_ql[dev]` no longer resolves. It listed black, ruff, mypy, pytest, pytest-cov and types-Pillow — a host toolchain nothing here installs or runs: linting, type-checking and tests all execute in Docker from pinned images (`make lint` / `make mypy` / `make test`).
 - **`pyusb` and `attrs` are no longer dependencies** (BROTHERQL-16). Neither was ever imported: `pyusb` was declared for a USB backend this fork never brought over, and the specs are stdlib dataclasses. Every consumer was installing and scanning both for nothing. If you were relying on `brother_ql` to pull `pyusb` in for your own USB code, declare it yourself.
 
 ### Features
