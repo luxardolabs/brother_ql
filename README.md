@@ -15,7 +15,7 @@ A clean, modern Python library for Brother QL series label printers. Pure Python
 
 ## Installation
 
-This fork is **not published to PyPI**. `pip install brother-ql` fetches the original [pklaus/brother_ql](https://pypi.org/project/brother-ql/) (0.9.4) — a different library with a different API. Install this one from the repository:
+This fork is **not on PyPI, and there are no plans to publish it there**. `pip install brother-ql` fetches the original [pklaus/brother_ql](https://pypi.org/project/brother-ql/) (0.9.4) — a different library with a different API. Install this one from the repository, or from the artifacts attached to a [release](https://github.com/luxardolabs/brother_ql/releases):
 
 ```bash
 pip install 'brother_ql @ git+https://github.com/luxardolabs/brother_ql.git@v2.0.0'

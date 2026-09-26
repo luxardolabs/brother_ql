@@ -34,12 +34,13 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+# Only what the package imports. pyusb was declared for a USB backend this fork never
+# brought over, and attrs for specs that are stdlib dataclasses — both were installed by
+# every consumer and scanned forever as supply surface for nothing (BROTHERQL-16).
 dependencies = [
     "click>=8.0",
     "packbits>=0.6",
     "Pillow>=10.0",
-    "pyusb>=1.2.0",
-    "attrs>=22.0",
 ]
 
 [project.urls]
