@@ -1,6 +1,6 @@
 {
   "guard": "luxarch",
-  "guard_version": "0.201.0",
+  "guard_version": "0.250.1",
   "repo": "/repo",
   "targets": [
     {
@@ -128,9 +128,45 @@
         "inert_reason": "not an app-kind target \u2014 the canonical `check` composition is app-only, so this target's gate shape was never evaluated. Recipe safety is checked for every kind by repo.makefile_no_command_substitution."
       },
       {
+        "rule": "repo.guard_owned_tools_undeclared",
+        "status": "INERT",
+        "since": "0.243.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "not an app-kind target: a guard or library may depend on these tools as its product"
+      },
+      {
+        "rule": "repo.dev_tools_not_in_production",
+        "status": "INERT",
+        "since": "0.243.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "not an app-kind target: a guard or library may depend on these tools as its product"
+      },
+      {
+        "rule": "repo.fleet_skills_present",
+        "status": "INERT",
+        "since": "0.245.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no agent-instruction file (CLAUDE.md / AGENTS.md): this repo is not set up for agents"
+      },
+      {
         "rule": "repo.makefile_no_command_substitution",
         "status": "PASS",
         "since": "0.185.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": false,
+        "inert_reason": ""
+      },
+      {
+        "rule": "repo.makefile_no_fixed_tmp",
+        "status": "PASS",
+        "since": "0.249.0",
         "violations": 0,
         "deferred": false,
         "inert": false,
@@ -179,7 +215,79 @@
         "violations": 0,
         "deferred": false,
         "inert": true,
-        "inert_reason": "no committed `.env*` pins a `TAG=` \u2014 nothing has declared what a stack runs"
+        "inert_reason": "make could not evaluate Makefile: `release` publishes but make could not evaluate it \u2014 NOT a clearance"
+      },
+      {
+        "rule": "repo.release_scans_candidate",
+        "status": "INERT",
+        "since": "0.250.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "make could not evaluate Makefile: `release` publishes but make could not evaluate it \u2014 NOT a clearance"
+      },
+      {
+        "rule": "repo.makefile_image_ref_well_formed",
+        "status": "PASS",
+        "since": "0.208.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": false,
+        "inert_reason": ""
+      },
+      {
+        "rule": "repo.alembic_env_honors_caller_url",
+        "status": "INERT",
+        "since": "0.217.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no alembic env.py found (nothing carrying `context.configure`) \u2014 there is no migration runner here whose URL could be overridden, so the invariant was never evaluated. NOT a clearance: a repo that DOES migrate and whose env.py this scan missed is carrying the defect unexamined, and that is worth an escalation"
+      },
+      {
+        "rule": "repo.emitted_assets_current",
+        "status": "PASS",
+        "since": "0.208.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": false,
+        "inert_reason": ""
+      },
+      {
+        "rule": "repo.luxpm_receipt_current",
+        "status": "INERT",
+        "since": "0.211.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no `.luxpm-receipt` is committed \u2014 there is no tracker attestation to verify. NOT a clearance: it means this repo's tracker currency is entirely self-reported, which is the drift this receipt exists to make visible. Issue one with `luxpm_issue_sync_receipt` and commit it verbatim"
+      },
+      {
+        "rule": "repo.guard_status_current",
+        "status": "INERT",
+        "since": "0.222.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "this run is WRITING the status files (`make status`), so the files on disk are the ones it is replacing \u2014 judging them would record a red about themselves in the committed snapshot. The next `make check` judges what was written"
+      },
+      {
+        "rule": "repo.claude_pointer_present",
+        "status": "INERT",
+        "since": "0.213.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no agent-instruction file (CLAUDE.md / AGENTS.md) \u2014 there is nothing to point AT the standard from. NOT a clearance: an agent working here has no route to the fleet conduct rules at all"
+      },
+      {
+        "rule": "repo.gitleaks_scans_identity",
+        "status": "PASS",
+        "since": "0.204.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": false,
+        "inert_reason": ""
       },
       {
         "rule": "repo.makefile_test_db_harness",
@@ -219,12 +327,12 @@
       },
       {
         "rule": "repo.github_release_wired",
-        "status": "PASS",
+        "status": "INERT",
         "since": "0.150.0",
         "violations": 0,
         "deferred": false,
-        "inert": false,
-        "inert_reason": ""
+        "inert": true,
+        "inert_reason": "not an app-kind target \u2014 no release path to judge"
       },
       {
         "rule": "repo.release_tag_hygiene",
@@ -270,6 +378,15 @@
         "deferred": false,
         "inert": false,
         "inert_reason": ""
+      },
+      {
+        "rule": "repo.fleet_dep_floor",
+        "status": "INERT",
+        "since": "0.219.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no resolved lockfile found (no poetry.lock, uv.lock or pinned requirements.txt at the repo root or any declared app dir) \u2014 there is no record of which versions this repo actually runs, so no floor could be compared. NOT a clearance: a repo that DOES ship Python dependencies without a committed lock is carrying un-reproducible builds, which is its own problem worth raising"
       },
       {
         "rule": "repo.schema_from_migrations",
@@ -335,6 +452,15 @@
         "inert_reason": ""
       },
       {
+        "rule": "repo.makefile_db_ephemeral_volume",
+        "status": "PASS",
+        "since": "0.240.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": false,
+        "inert_reason": ""
+      },
+      {
         "rule": "repo.alembic_path_separator",
         "status": "PASS",
         "since": "0.71.0",
@@ -347,6 +473,15 @@
         "rule": "repo.alembic_autogen_comparisons",
         "status": "PASS",
         "since": "0.123.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": false,
+        "inert_reason": ""
+      },
+      {
+        "rule": "repo.migration_notnull_safe",
+        "status": "PASS",
+        "since": "0.239.0",
         "violations": 0,
         "deferred": false,
         "inert": false,
@@ -426,20 +561,20 @@
       }
     ],
     "summary": {
-      "PASS": 29,
+      "PASS": 34,
       "FAIL": 0,
       "XFAIL": 0,
       "XPASS": 0,
-      "INERT": 11
+      "INERT": 21
     }
   },
   "summary": {
-    "PASS": 34,
+    "PASS": 39,
     "FAIL": 0,
     "XFAIL": 0,
     "XPASS": 0,
-    "INERT": 11
+    "INERT": 21
   },
-  "commit": "e29ca73dfbbc275bdca745b4eba8e5d562954f20",
-  "generated_at": "2026-09-26T06:37:50Z"
+  "commit": "7969b7ac8ae2fe9aac8384a4d11e146bdbb4cddf",
+  "generated_at": "2026-10-03T03:15:03Z"
 }

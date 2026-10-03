@@ -1,17 +1,28 @@
 {
   "guard": "luxaudit",
-  "guard_version": "0.9.0",
+  "guard_version": "0.13.0",
   "repo": "/repo",
   "packages": 3,
   "source": "requirements/audit.txt",
   "summary": {
     "PASS": 3,
     "FAIL": 0,
-    "XFAIL": 0
+    "XFAIL": 0,
+    "INERT": 1
   },
   "vulnerable": [],
   "deferred": [],
+  "banned": [],
   "not_audited": [],
-  "commit": "e29ca73dfbbc275bdca745b4eba8e5d562954f20",
-  "generated_at": "2026-09-26T06:37:50Z"
+  "image": {
+    "ref": "",
+    "inert": true,
+    "inert_reason": "no Dockerfile, so the repo ships no image of its own",
+    "error": "",
+    "not_released": [],
+    "vulnerable": [],
+    "deferred": []
+  },
+  "commit": "7969b7ac8ae2fe9aac8384a4d11e146bdbb4cddf",
+  "generated_at": "2026-10-03T03:15:03Z"
 }
