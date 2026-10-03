@@ -1,13 +1,13 @@
 format: luxpm-sync-receipt/1
 project: BROTHERQL
 repository_url: https://github.com/luxardolabs/brother_ql
-issued_at: 2026-10-03T03:35:21+00:00
-last_activity_at: 2026-10-03T03:35:13+00:00
+issued_at: 2026-10-03T03:39:09+00:00
+last_activity_at: 2026-10-03T03:39:06+00:00
 stale_days: 14
 open: 1
 open_stale: 0
 closed_without_summary: 0
 open_escalations: 1
-last_known_commit: 9405b11a62f545e26fe0bdca487e97666f22f9b5
+last_known_commit: ee59fec959246575b9e0cf1b2bc04111bd1dcfff
 key_id: cbb673eafd0c3932
-signature: mjn0/ARq/p04TsbWyEa2VHBtEX8svmHn9qKZ/NsI/75MswbpuS482e8yjjt5Uol0z/2IPojLZhUEtpH1qWHQCA==
+signature: NBIrQs/Fp92hNiFi0l3SGALA2vslDc9tY83DKb4q1uoWXmBsD4VTcR/KKCCTeRjippoBhc6HaMRb1jpt5c6NBg==
