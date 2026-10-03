@@ -147,12 +147,12 @@
       },
       {
         "rule": "repo.fleet_skills_present",
-        "status": "INERT",
+        "status": "PASS",
         "since": "0.245.0",
         "violations": 0,
         "deferred": false,
-        "inert": true,
-        "inert_reason": "no agent-instruction file (CLAUDE.md / AGENTS.md): this repo is not set up for agents"
+        "inert": false,
+        "inert_reason": ""
       },
       {
         "rule": "repo.makefile_no_command_substitution",
@@ -215,7 +215,7 @@
         "violations": 0,
         "deferred": false,
         "inert": true,
-        "inert_reason": "make could not evaluate Makefile: `release` publishes but make could not evaluate it \u2014 NOT a clearance"
+        "inert_reason": "no committed `.env*` pins a `TAG=` and no makefile publishes an immutable tag \u2014 nothing has declared what a stack runs"
       },
       {
         "rule": "repo.release_scans_candidate",
@@ -224,7 +224,7 @@
         "violations": 0,
         "deferred": false,
         "inert": true,
-        "inert_reason": "make could not evaluate Makefile: `release` publishes but make could not evaluate it \u2014 NOT a clearance"
+        "inert_reason": "no make target publishes an immutable tag \u2014 there is no push to gate"
       },
       {
         "rule": "repo.makefile_image_ref_well_formed",
@@ -273,12 +273,12 @@
       },
       {
         "rule": "repo.claude_pointer_present",
-        "status": "INERT",
+        "status": "PASS",
         "since": "0.213.0",
         "violations": 0,
         "deferred": false,
-        "inert": true,
-        "inert_reason": "no agent-instruction file (CLAUDE.md / AGENTS.md) \u2014 there is nothing to point AT the standard from. NOT a clearance: an agent working here has no route to the fleet conduct rules at all"
+        "inert": false,
+        "inert_reason": ""
       },
       {
         "rule": "repo.gitleaks_scans_identity",
@@ -561,20 +561,20 @@
       }
     ],
     "summary": {
-      "PASS": 34,
+      "PASS": 36,
       "FAIL": 0,
       "XFAIL": 0,
       "XPASS": 0,
-      "INERT": 21
+      "INERT": 19
     }
   },
   "summary": {
-    "PASS": 39,
+    "PASS": 41,
     "FAIL": 0,
     "XFAIL": 0,
     "XPASS": 0,
-    "INERT": 21
+    "INERT": 19
   },
-  "commit": "b86eb4437a2e1c1dadd2cf66a9e3dc6e99be7205",
-  "generated_at": "2026-10-03T03:17:32Z"
+  "commit": "10688257e3a53eda70a1d0153afe4fef1a2e1698",
+  "generated_at": "2026-10-03T03:32:07Z"
 }
