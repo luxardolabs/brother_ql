@@ -80,6 +80,23 @@ SKIP_NO_REGISTRY = if [ -z "$(LUX_REGISTRY)" ]; then echo "$@: LUX_REGISTRY unse
 # `docker run --rm -v $(PWD):/repo $(LUXARCH_IMAGE) --plan`.
 check: guard-version-check honest lint mypy test arch audit gitleaks ## THE fleet gate — every guard, in order
 
+# FLEET-ONBOARDING-STANDARD §5: proves the repo is ONBOARDED (all three guards wired and
+# honest, privacy wired, history clean). It never judges red/green: that is `check`.
+onboard-check: ## Prove the repo is onboarded: all three guards on + honest + privacy wired (NOT green)
+	@set +e; $(SKIP_NO_REGISTRY); fail=0; \
+	$(GUARD_RUN) $(LUXARCH_IMAGE)  --version      >/dev/null || { echo "luxarch not wired"; fail=1; }; \
+	$(GUARD_RUN) $(LUXARCH_IMAGE)  --assert-scans >/dev/null 2>&1 || { echo "luxarch: a rule family scanned NOTHING (hollow green)"; fail=1; }; \
+	$(GUARD_RUN) $(LUXLINT_IMAGE)  --preflight    >/dev/null || { echo "mypy tail NOT honest (luxlint --preflight)"; fail=1; }; \
+	$(GUARD_RUN) $(LUXAUDIT_IMAGE) 2>&1 | grep -q "scan could not run" && { echo "luxaudit can't scan — supply-chain blind"; fail=1; }; \
+	$(GUARD_RUN) $(LUXLINT_IMAGE)  --version      >/dev/null || { echo "luxlint not wired"; fail=1; }; \
+	$(GUARD_RUN) $(LUXAUDIT_IMAGE) --version      >/dev/null || { echo "luxaudit not wired"; fail=1; }; \
+	[ -f hooks/pre-commit ] || { echo "secret git-hooks NOT wired (luxlint --emit-hooks | sh, commit hooks/)"; fail=1; }; \
+	[ "$$(git config core.hooksPath)" = hooks ] || { echo "core.hooksPath is not hooks/ — the secret hooks never fire"; fail=1; }; \
+	[ ! -d .github/workflows ] || { echo "public CI present — make check is the sole gate (remove .github/workflows)"; fail=1; }; \
+	! sed 's/#.*//' Makefile | grep -qE '^[[:space:]]+[^#]*\bruff[[:space:]]+format\b' || { echo "Makefile runs a bare 'ruff format' — use 'luxlint --format'"; fail=1; }; \
+	$(MAKE) -s gitleaks >/dev/null 2>&1 || { echo "gitleaks failed over FULL history (secrets or a non-fleet commit identity) — scrub before onboarding is complete"; fail=1; }; \
+	[ $$fail -eq 0 ] && echo "onboard-check: all three guards on + honest + privacy wired + history clean ✓" || { echo "onboard-check FAILED"; exit 1; }
+
 ##@ Quality
 
 honest: ## HONESTY gate — fails iff a rule family scanned nothing or the mypy run is dishonest (never on reds)
@@ -266,20 +283,24 @@ gitleaks-staged: ## secret scan of the STAGED changes (run by hooks/pre-commit)
 # ordered ritual (including the LuxPM mirror) is .claude/skills/release/SKILL.md.
 RELEASE_VERSION := $(shell cat VERSION 2>/dev/null)
 
+# One shell per step, and `$(MAKE)` on lines of its own: make EXECUTES any line that
+# mentions $(MAKE) even under `make -n`, so a single-line recipe would really tag, push and
+# publish on a dry run (and luxarch, which judges the recipe by `make -n`, could not read it).
 release: ## Tag, push, build and publish the GitHub Release for the VERSION file's version
 	@set -e; \
 	[ -n "$(RELEASE_VERSION)" ] || { echo "release: VERSION is empty"; exit 1; }; \
 	[ -z "$$(git status --porcelain)" ] || { echo "release: working tree is dirty — commit first"; exit 1; }; \
 	grep -q "^## $(RELEASE_VERSION) " CHANGELOG.md || { echo "release: CHANGELOG.md has no '## $(RELEASE_VERSION)' section"; exit 1; }; \
-	git rev-parse -q --verify refs/tags/v$(RELEASE_VERSION) >/dev/null && { echo "release: tag v$(RELEASE_VERSION) already exists"; exit 1; }; \
-	$(MAKE) --no-print-directory check; \
-	rm -rf dist; $(MAKE) --no-print-directory build; \
-	awk '/^## $(RELEASE_VERSION) /{f=1;next} /^## /{f=0} f' CHANGELOG.md > .release-notes.md; \
+	if git rev-parse -q --verify refs/tags/v$(RELEASE_VERSION) >/dev/null; then echo "release: tag v$(RELEASE_VERSION) already exists"; exit 1; fi
+	@$(MAKE) --no-print-directory check
+	@rm -rf dist
+	@$(MAKE) --no-print-directory build
+	@set -e; N=$$(mktemp); trap 'rm -f "$$N"' EXIT INT TERM; \
+	awk '/^## $(RELEASE_VERSION) /{f=1;next} /^## /{f=0} f' CHANGELOG.md > "$$N"; \
 	git tag -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)"; \
 	git push origin HEAD; \
 	git push origin v$(RELEASE_VERSION); \
-	gh release create v$(RELEASE_VERSION) --title "$(RELEASE_VERSION)" --notes-file .release-notes.md dist/*; \
-	rm -f .release-notes.md; \
+	gh release create v$(RELEASE_VERSION) --title "$(RELEASE_VERSION)" --notes-file "$$N" dist/*; \
 	echo "released v$(RELEASE_VERSION) — now mirror it to LuxPM (see .claude/skills/release/SKILL.md)"
 
 ##@ Build
@@ -345,4 +366,4 @@ help: ## Show this help
 	  /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 	@echo
 
-.PHONY: check honest lint mypy arch audit audit-lock format test gitleaks gitleaks-staged release build status guard-version-check guard-upgrade help
+.PHONY: check onboard-check honest lint mypy arch audit audit-lock format test gitleaks gitleaks-staged release build status guard-version-check guard-upgrade help

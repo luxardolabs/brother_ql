@@ -13,19 +13,20 @@ make -k check # run every step even after one fails
 
 `check` is `guard-version-check honest lint mypy test arch audit gitleaks`. It is a prerequisite list, so it stops at the first failure; `-k` shows every verdict.
 
-| Target            | What it does                                                 |
-| ----------------- | ------------------------------------------------------------ |
-| `make lint`       | ruff + markdown + repo rules, canonical config               |
-| `make mypy`       | mypy, canonical config, mount-only                           |
-| `make test`       | pytest against the installed package                         |
-| `make arch`       | architecture conformance                                     |
-| `make audit`      | dependency CVEs against `requirements/audit.txt`             |
-| `make gitleaks`   | secret scan over the full history                            |
-| `make format`     | apply the canonical formatter (run before committing)        |
-| `make status`     | regenerate the committed guard-status files                  |
-| `make audit-lock` | recompile `requirements/audit.txt` after a dependency change |
-| `make build`      | build the sdist + wheel                                      |
-| `make release`    | the library release ritual — see [Releases](#releases)       |
+| Target               | What it does                                                 |
+| -------------------- | ------------------------------------------------------------ |
+| `make onboard-check` | proves all three guards are wired and honest (not green)     |
+| `make lint`          | ruff + markdown + repo rules, canonical config               |
+| `make mypy`          | mypy, canonical config, mount-only                           |
+| `make test`          | pytest against the installed package                         |
+| `make arch`          | architecture conformance                                     |
+| `make audit`         | dependency CVEs against `requirements/audit.txt`             |
+| `make gitleaks`      | secret scan over the full history                            |
+| `make format`        | apply the canonical formatter (run before committing)        |
+| `make status`        | regenerate the committed guard-status files                  |
+| `make audit-lock`    | recompile `requirements/audit.txt` after a dependency change |
+| `make build`         | build the sdist + wheel                                      |
+| `make release`       | the library release ritual — see [Releases](#releases)       |
 
 `make help` lists them all.
 
