@@ -40,6 +40,8 @@ The package is installed into a throwaway container first, so the suite exercise
 
 The suite is 73 tests across 9 files, covering conversion, labels and models, raster generation, image processing, positioning, config-override precedence, the CLI, and end-to-end byte generation.
 
+The coverage floor is `[test].coverage_min = 90` in `.luxlint.toml`, set from a measured 90% branch coverage. `make test` does not measure coverage yet, so nothing enforces the floor. A library-kind ratchet is escalated as BROTHERQL-19. Raise the floor when coverage rises, and never lower it.
+
 ## Repository layout
 
 The package lives under `src/` so tests and type-checking resolve the *installed* artifact rather than the working tree:
