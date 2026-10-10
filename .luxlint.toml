@@ -45,3 +45,9 @@ target = "py314"
 # force-green. Align to the canonical standard (`make format` clears the mechanical
 # part) or escalate a genuinely-wrong rule to the maintainer — never a local ruff/mypy
 # config, never a blanket `# noqa`.
+
+[test]
+# The coverage floor (test.coverage_floor_set). Measured 2026-10-10 on python:3.14-slim
+# against the installed package: `COVERAGE_CORE=sysmon coverage run --branch -m pytest`,
+# 73 passed, TOTAL 90% (855 stmts, 214 branches). Raise it as coverage rises; never lower it.
+coverage_min = 90
