@@ -40,7 +40,7 @@ The package is installed into a throwaway container first, so the suite exercise
 
 The suite is 73 tests across 9 files, covering conversion, labels and models, raster generation, image processing, positioning, config-override precedence, the CLI, and end-to-end byte generation.
 
-The coverage floor is `[test].coverage_min = 90` in `.luxlint.toml`, set from a measured 90% branch coverage. `make test` does not measure coverage yet, so nothing enforces the floor. A library-kind ratchet is escalated as BROTHERQL-19. Raise the floor when coverage rises, and never lower it.
+The coverage floor is `[test].coverage_min = 90` in `.luxlint.toml`, set from a measured 90% branch coverage. `make test` enforces it: it runs the suite under branch coverage (`COVERAGE_CORE=sysmon`) against the installed package, then feeds `coverage report` to `luxlint --coverage-ratchet`. A failing test or coverage below the floor fails `make test`. Raise the floor when coverage rises, and never lower it.
 
 ## Repository layout
 

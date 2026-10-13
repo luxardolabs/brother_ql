@@ -1,6 +1,6 @@
 {
   "guard": "luxarch",
-  "guard_version": "0.278.1",
+  "guard_version": "0.289.3",
   "repo": "/repo",
   "targets": [
     {
@@ -340,12 +340,12 @@
       },
       {
         "rule": "repo.luxpm_backlog_triaged",
-        "status": "INERT",
+        "status": "PASS",
         "since": "0.252.0",
         "violations": 0,
         "deferred": false,
-        "inert": true,
-        "inert_reason": "no closed issue lacks a summary, but the receipt (issued 2026-10-03T03:39:09+00:00) predates `open_untriaged`, so the open backlog was not judged. Re-issue it (`luxpm_issue_sync_receipt`). NOT a clearance",
+        "inert": false,
+        "inert_reason": "",
         "fix": "",
         "example": ""
       },
@@ -364,6 +364,17 @@
         "rule": "repo.claude_pointer_present",
         "status": "PASS",
         "since": "0.213.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": false,
+        "inert_reason": "",
+        "fix": "",
+        "example": ""
+      },
+      {
+        "rule": "repo.agent_instructions_resolve",
+        "status": "PASS",
+        "since": "0.280.0",
         "violations": 0,
         "deferred": false,
         "inert": false,
@@ -500,6 +511,17 @@
         "deferred": false,
         "inert": true,
         "inert_reason": "no resolved lockfile found (no poetry.lock, uv.lock or pinned requirements.txt at the repo root or any declared app dir) \u2014 there is no record of which versions this repo actually runs, so no floor could be compared. NOT a clearance: a repo that DOES ship Python dependencies without a committed lock is carrying un-reproducible builds, which is its own problem worth raising",
+        "fix": "",
+        "example": ""
+      },
+      {
+        "rule": "repo.images_on_fleet_line",
+        "status": "PASS",
+        "since": "0.282.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": false,
+        "inert_reason": "",
         "fix": "",
         "example": ""
       },
@@ -647,6 +669,17 @@
         "example": ""
       },
       {
+        "rule": "repo.image_block_wired",
+        "status": "INERT",
+        "since": "0.280.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "not an app target (fastapi-web / collector / poller / static-web): a library publishes with its own release",
+        "fix": "",
+        "example": ""
+      },
+      {
         "rule": "repo.poetry_version_consistent",
         "status": "INERT",
         "since": "0.268.0",
@@ -780,7 +813,7 @@
       }
     ],
     "summary": {
-      "PASS": 32,
+      "PASS": 35,
       "FAIL": 0,
       "XFAIL": 0,
       "XPASS": 0,
@@ -788,12 +821,12 @@
     }
   },
   "summary": {
-    "PASS": 37,
+    "PASS": 40,
     "FAIL": 0,
     "XFAIL": 0,
     "XPASS": 0,
     "INERT": 32
   },
-  "commit": "a124536b72585db34c3a1261aa81d8a5e5d60316",
-  "generated_at": "2026-10-10T23:39:15Z"
+  "commit": "8cfe24390ef98c73bcbd13425a0badcb7f8a966d",
+  "generated_at": "2026-10-13T03:10:20Z"
 }

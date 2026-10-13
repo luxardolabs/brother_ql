@@ -44,9 +44,9 @@ LUX_REGISTRY ?=
 # trails the published :latest (it is the first step of `make check`), and
 # `make guard-upgrade` bumps every pin and prints what newly bites. Keep the `:=` form —
 # guard-upgrade's sed rewrites exactly these three lines.
-LUXARCH_VERSION  := 0.278.1
-LUXLINT_VERSION  := 0.63.1
-LUXAUDIT_VERSION := 0.13.2
+LUXARCH_VERSION  := 0.289.3
+LUXLINT_VERSION  := 0.66.1
+LUXAUDIT_VERSION := 0.14.0
 
 LUXARCH_IMAGE  ?= $(LUX_REGISTRY)/luxardolabs/luxarch:$(LUXARCH_VERSION)
 LUXLINT_IMAGE  ?= $(LUX_REGISTRY)/luxardolabs/luxlint:$(LUXLINT_VERSION)
@@ -162,15 +162,24 @@ format: ## Apply every canonical formatter in place (luxlint --format) — write
 # pytest-asyncio is required, not optional: the canonical config sets `asyncio_mode =
 # auto` under `--strict-config`, so without the plugin pytest aborts on an unknown ini
 # key (exit 4, "no tests ran") — which reads as a pass in a careless tail.
-test: ## pytest against the INSTALLED package, with luxlint's canonical pytest config
-	@set +e; $(SKIP_NO_REGISTRY); \
+#
+# Coverage is the library recipe from `luxlint --playbook test-suite`: measure (branch
+# coverage under sysmon, --source the installed package), then feed `coverage report` to
+# `--coverage-ratchet` against [test].coverage_min in a SECOND step. Never a pipe: under
+# /bin/sh the pipe's status is the ratchet's, so a failing suite would exit 0. A failing
+# suite exits with its own status before the ratchet runs; otherwise the ratchet's wins.
+test: ## pytest against the INSTALLED package (canonical config), then the coverage ratchet
+	@set +e; $(SKIP_NO_REGISTRY); D=$$(mktemp -d); trap 'rm -rf "$$D" .luxlint.pytest.ini' EXIT INT TERM; \
 	$(GUARD_RUN) $(LUXLINT_IMAGE) --emit-config pytest > .luxlint.pytest.ini; \
-	docker run --rm -v $(PWD):/repo -w /repo $(TAIL_IMAGE) \
-	  sh -c 'pip install -q --root-user-action=ignore pytest pytest-asyncio >/dev/null \
+	docker run --rm -v $(PWD):/repo -w /repo -v "$$D":/out $(TAIL_IMAGE) \
+	  sh -c 'pip install -q --root-user-action=ignore pytest pytest-asyncio coverage >/dev/null \
 	         && pip install -q --root-user-action=ignore . >/dev/null \
-	         && pytest -c .luxlint.pytest.ini'; rc=$$?; \
-	rm -f .luxlint.pytest.ini; \
-	exit $$rc
+	         && export COVERAGE_CORE=sysmon COVERAGE_FILE=/out/.coverage \
+	         && python -m coverage run --branch --source=brother_ql -m pytest -c .luxlint.pytest.ini -p no:cacheprovider \
+	         && python -m coverage report > /out/coverage.txt'; rc=$$?; \
+	[ $$rc -eq 0 ] || exit $$rc; \
+	c=0; docker run --rm -i -v $(PWD):/repo $(LUXLINT_IMAGE) --coverage-ratchet < "$$D/coverage.txt" > "$$D/ratchet.txt" || c=$$?; \
+	sed -n '/coverage ratchet/,$$p' "$$D/ratchet.txt"; exit $$c
 
 ##@ Secrets
 
@@ -183,8 +192,8 @@ test: ## pytest against the INSTALLED package, with luxlint's canonical pytest c
 # Both targets fire on their own via the committed git hooks in hooks/ (core.hooksPath,
 # installed by `luxlint --emit-hooks | sh`): pre-commit runs gitleaks-staged, pre-push runs
 # gitleaks. That is the belt; `make check` is the braces.
-# luxarch:gitleaks asset v12 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit gitleaks`.
-# ── The privacy gate: BOTH surfaces ─────────────────────────────────────────────────────────────
+# luxarch:gitleaks asset v14 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit gitleaks`.
+# ── The privacy gate: EVERY surface a commit publishes ──────────────────────────────────────────
 # Emitted by `luxarch --emit gitleaks`. Drop in verbatim.
 #
 # `gitleaks` scans DIFF CONTENT. A commit's author/committer address lives in the commit object
@@ -193,6 +202,12 @@ test: ## pytest against the INSTALLED package, with luxlint's canonical pytest c
 # personal address in both the author and committer fields, and it would have reported exactly the
 # same thing after the scrub: identical output, opposite truth. Measured across the fleet, EIGHT
 # repos carry a personal address in history and two of them are PUBLIC.
+#
+# v13: the commit MESSAGE is a third surface, and through v12 nothing read it. It is neither a patch
+# nor the header, so a message naming an org-denylisted host passed the staged scan, the full-history
+# scan and the push hook: seven commits in one public repo, found only when a file repeated the name.
+# Every commit and annotated-tag message in history is now scanned with the same config as file
+# content, and `gitleaks-commit-msg` scans the message being written (run by hooks/commit-msg).
 
 # Commit identities this repo accepts. The fleet account's `users.noreply.github.com` address, plus
 # GitHub's own web-UI committer. Widen ONLY for a real outside contributor, with a comment saying who.
@@ -234,17 +249,20 @@ GIT_IDENTITY_OK ?= <214140984\+luxardolabs@users\.noreply\.github\.com>$$|<norep
 # resolve to the same bits, and a tampered or re-tagged copy fails the pull instead of scanning.
 GITLEAKS_IMAGE = $(if $(findstring /,$(LUXLINT)),$(dir $(LUXLINT)),zricethezav/)gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
 
+# v13: `/repo` is `$(CURDIR)`, this makefile's directory. v1-v12 mounted `$(PWD)`, the CALLER's shell
+# directory, so `make -C <repo> gitleaks` run from another repo scanned THAT repo's history with THAT
+# repo's config while the identity pass read this one: two repos' answers, reported as this one's.
 gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks cover commit/push)
 	@set -e; C=$$(mktemp); trap 'rm -f "$$C"' EXIT INT TERM; \
-	docker run --rm -v $(PWD):/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
-	docker run --rm -v $(PWD):/repo -v "$$C":/gl.toml:ro -w /repo \
+	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
+	docker run --rm -v "$(CURDIR)":/repo -v "$$C":/gl.toml:ro -w /repo \
 	  $(GITLEAKS_IMAGE) git /repo -c /gl.toml --redact -v --ignore-gitleaks-allow
 	@# v12: what `gitleaks git` never reads. It scans git's PATCHES, and git prints no patch for a file it
 	@# treats as binary: a NUL byte, UTF-16 (a `Localizable.strings`), or a `binary` / `-diff` attribute.
 	@# A token in any of them reached the remote with "no leaks found". So every path git ever showed as
 	@# binary is re-read as text, NULs stripped, and scanned by path (the config's path allowlists hold).
 	@set -e; C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
-	docker run --rm -v $(PWD):/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
+	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
 	git -c core.quotePath=false log --branches --tags HEAD --format= -p --no-ext-diff --no-textconv \
 	  > "$$D/patches"; \
 	sed -n 's|^Binary files .* and b/\(.*\) differ$$|\1|p' "$$D/patches" | sort -u > "$$D/binary"; \
@@ -260,6 +278,42 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	    $(GITLEAKS_IMAGE) dir . -c /gl.toml --redact -v --ignore-gitleaks-allow \
 	    --gitleaks-ignore-path /none; \
 	fi
+	@# v13: every commit and annotated-tag MESSAGE, scanned as a file with the same config (credential
+	@# rules and the denylist). One `git log` and one `for-each-ref`, split on a header line carrying a
+	@# per-run nonce, so a message cannot forge a header and steer its own lines out of the scan.
+	@set -e; C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
+	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
+	N=$$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n'); [ $${#N} -eq 32 ]; \
+	mkdir -p "$$D/t/commit-message" "$$D/t/tag-message" "$$D/none"; \
+	git log --branches --tags HEAD --format="$$N commit-message/%H%n%B" > "$$D/raw"; \
+	git for-each-ref refs/tags --format="$$N tag-message/%(objectname)%0a%(contents)" >> "$$D/raw"; \
+	tr -d '\000' < "$$D/raw" > "$$D/msgs"; \
+	LC_ALL=C awk -v n="$$N" -v d="$$D/t" \
+	  '$$1 == n && NF == 2 { if (f != "") close(f); f = d "/" $$2; printf "" > f; next } \
+	   f != "" { print > f }' "$$D/msgs"; \
+	docker run --rm -v "$$D/t":/scan:ro -w /scan -v "$$D/none":/none:ro -v "$$C":/gl.toml:ro \
+	  $(GITLEAKS_IMAGE) dir . -c /gl.toml --redact -v --ignore-gitleaks-allow \
+	  --gitleaks-ignore-path /none || { \
+	  echo "REFUSING: a commit or tag MESSAGE carries a finding (the File above names it:"; \
+	  echo "  commit-message/<sha> or tag-message/<object>). A message is published with its commit"; \
+	  echo "  forever. Reword it (git rebase -i, or git filter-repo --message-callback for older"; \
+	  echo "  history), re-run, and ask the OWNER to approve the force-push. Never force-push unapproved."; \
+	  exit 1; }
+	@# v14: what a push publishes besides content and messages: every file PATH in history and every
+	@# branch and tag NAME. A path is not a patch line, so `gitleaks git` never read one, and a file or
+	@# a branch named for an internal host passed every gate into a public remote.
+	@set -e; C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
+	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
+	mkdir -p "$$D/t" "$$D/none"; \
+	git -c core.quotePath=false log --branches --tags HEAD --format= --name-only | sort -u > "$$D/t/paths"; \
+	git for-each-ref --format='%(refname:short)' refs/heads refs/tags > "$$D/t/ref-names"; \
+	docker run --rm -v "$$D/t":/scan:ro -w /scan -v "$$D/none":/none:ro -v "$$C":/gl.toml:ro \
+	  $(GITLEAKS_IMAGE) dir . -c /gl.toml --redact -v --ignore-gitleaks-allow \
+	  --gitleaks-ignore-path /none || { \
+	  echo "REFUSING: a file PATH or a branch/tag NAME carries a finding (File: paths or ref-names above)."; \
+	  echo "  A name is published with the history it is in. Rename it (git mv; git branch -m; for older"; \
+	  echo "  history git filter-repo --path-rename), re-run, and ask the OWNER to approve the force-push."; \
+	  exit 1; }
 	@# The identity pass — the half gitleaks structurally cannot do. Cheap: one `git log`.
 	@# Walks what THIS repo publishes (branches, tags, HEAD), NOT `--all`: a remote-tracking ref caches the
 	@# remote's state, which during a scrub is by definition the un-rewritten history you are about to
@@ -298,7 +352,7 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 # leak. New content gets no waiver: `.gitleaksignore` stays a ledger for the full-history scan only.
 gitleaks-staged: ## secret scan of the STAGED changes (run by hooks/pre-commit)
 	@set -e; C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
-	docker run --rm -v $(PWD):/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
+	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
 	mkdir "$$D/t" "$$D/none"; \
 	git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR -z > "$$D/names"; \
 	tr '\000' '\n' < "$$D/names" | while IFS= read -r f; do \
@@ -311,6 +365,28 @@ gitleaks-staged: ## secret scan of the STAGED changes (run by hooks/pre-commit)
 	docker run --rm -v "$$D/t":/scan:ro -w /scan -v "$$D/none":/none:ro -v "$$C":/gl.toml:ro \
 	  $(GITLEAKS_IMAGE) dir . -c /gl.toml --redact -v --ignore-gitleaks-allow \
 	  --gitleaks-ignore-path /none
+
+# v13: the message being WRITTEN, run by hooks/commit-msg (pre-commit cannot see it: git writes the
+# message after that hook runs). The hook passes the file in `GITLEAKS_COMMIT_MSG`. The WHOLE file is
+# scanned, comment lines included: `--cleanup=verbatim` publishes them, and a cut at the scissors line
+# would let a verbatim message hide everything below one. No file to read is a refusal, never a pass.
+gitleaks-commit-msg: ## secret + denylist scan of the commit MESSAGE being written (run by hooks/commit-msg)
+	@set -e; M="$${GITLEAKS_COMMIT_MSG:-}"; \
+	if [ -z "$$M" ] || [ ! -f "$$M" ] || [ ! -r "$$M" ]; then \
+	  echo "REFUSING: no commit message to scan (GITLEAKS_COMMIT_MSG='$$M'). hooks/commit-msg" >&2; \
+	  echo "  passes the file git hands it; re-emit the hooks with luxlint --emit-hooks." >&2; \
+	  exit 1; \
+	fi; \
+	C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
+	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
+	mkdir -p "$$D/t/commit-message" "$$D/none"; \
+	tr -d '\000' < "$$M" > "$$D/t/commit-message/COMMIT_EDITMSG"; \
+	docker run --rm -v "$$D/t":/scan:ro -w /scan -v "$$D/none":/none:ro -v "$$C":/gl.toml:ro \
+	  $(GITLEAKS_IMAGE) dir . -c /gl.toml --redact -v --ignore-gitleaks-allow \
+	  --gitleaks-ignore-path /none || { \
+	  echo "REFUSING: this commit's MESSAGE carries a finding. A message is published with the" >&2; \
+	  echo "  commit forever: reword it and commit again. Never --no-verify." >&2; \
+	  exit 1; }
 
 ##@ Release
 
@@ -379,7 +455,9 @@ guard-version-check: ## FATAL: fail if any guard pin is behind the published :la
 	  fi; \
 	done; exit $$rc
 
-# luxarch:guard-upgrade asset v1 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit guard-upgrade`.
+# luxarch:guard-upgrade asset v2 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit guard-upgrade`.
+# v2: the preview mounts `$(CURDIR)`, this makefile's directory (it edits ./Makefile there). v1 mounted
+# `$(PWD)`, the caller's directory, so `make -C <repo> guard-upgrade` previewed ANOTHER repo's new reds.
 guard-upgrade:  ## Bump every guard pin to the published latest (prints what newly bites)
 	@for g in luxarch luxlint luxaudit; do \
 	  docker pull -q $(REGISTRY)/luxardolabs/$$g:latest >/dev/null 2>&1 || true; \
@@ -393,7 +471,7 @@ guard-upgrade:  ## Bump every guard pin to the published latest (prints what new
 	  new=$$(sed -n -E "s/^$$var[[:space:]]*:=[[:space:]]*//p" Makefile); \
 	  if [ "$$new" != "$$latest" ]; then echo "!! $$var did NOT change (still $$new)"; exit 1; fi; \
 	  if [ "$$old" != "$$latest" ]; then echo "$$var $$old -> $$latest"; bumped=1; fi; \
-	  [ "$$g" = luxarch ] && [ "$$old" != "$$latest" ] && docker run --rm -v $(PWD):/repo $(REGISTRY)/luxardolabs/luxarch:$$latest --new-rules --since $$old || true; \
+	  [ "$$g" = luxarch ] && [ "$$old" != "$$latest" ] && docker run --rm -v "$(CURDIR)":/repo $(REGISTRY)/luxardolabs/luxarch:$$latest --new-rules --since $$old || true; \
 	done; \
 	if [ -n "$$bumped" ]; then echo "pins bumped — re-run make check"; \
 	elif [ -n "$$checked" ]; then echo "all pins already at latest"; \
