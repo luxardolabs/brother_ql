@@ -168,15 +168,24 @@ format: ## Apply every canonical formatter in place (luxlint --format) — write
 # `--coverage-ratchet` against [test].coverage_min in a SECOND step. Never a pipe: under
 # /bin/sh the pipe's status is the ratchet's, so a failing suite would exit 0. A failing
 # suite exits with its own status before the ratchet runs; otherwise the ratchet's wins.
+#
+# Hardened by an adversarial pass, matching `luxarch --emit test-block`:
+# - the emitted config must arrive (`|| exit 2`), or pytest silently runs WITHOUT it
+#   (no --strict-config, no filterwarnings=error) and passes;
+# - the config lives in the run's own temp dir, never the repo root, so two runs in one
+#   tree cannot delete each other's config mid-run;
+# - the source is mounted read-only with PYTHONDONTWRITEBYTECODE, so nothing lands in it;
+# - `coverage report --precision=2`: a whole-percent report rounds 89.5% up to "90%" and
+#   passes a floor of 90.
 test: ## pytest against the INSTALLED package (canonical config), then the coverage ratchet
-	@set +e; $(SKIP_NO_REGISTRY); D=$$(mktemp -d); trap 'rm -rf "$$D" .luxlint.pytest.ini' EXIT INT TERM; \
-	$(GUARD_RUN) $(LUXLINT_IMAGE) --emit-config pytest > .luxlint.pytest.ini; \
-	docker run --rm -v $(PWD):/repo -w /repo -v "$$D":/out $(TAIL_IMAGE) \
+	@set +e; $(SKIP_NO_REGISTRY); D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT INT TERM; \
+	$(GUARD_RUN) $(LUXLINT_IMAGE) --emit-config pytest > "$$D/pytest.ini" || exit 2; \
+	docker run --rm -v $(PWD):/repo:ro -w /repo -v "$$D":/out -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) \
 	  sh -c 'pip install -q --root-user-action=ignore pytest pytest-asyncio coverage >/dev/null \
 	         && pip install -q --root-user-action=ignore . >/dev/null \
 	         && export COVERAGE_CORE=sysmon COVERAGE_FILE=/out/.coverage \
-	         && python -m coverage run --branch --source=brother_ql -m pytest -c .luxlint.pytest.ini -p no:cacheprovider \
-	         && python -m coverage report > /out/coverage.txt'; rc=$$?; \
+	         && python -m coverage run --branch --source=brother_ql -m pytest -c /out/pytest.ini --rootdir=/repo -p no:cacheprovider \
+	         && python -m coverage report --precision=2 > /out/coverage.txt'; rc=$$?; \
 	[ $$rc -eq 0 ] || exit $$rc; \
 	c=0; docker run --rm -i -v $(PWD):/repo $(LUXLINT_IMAGE) --coverage-ratchet < "$$D/coverage.txt" > "$$D/ratchet.txt" || c=$$?; \
 	sed -n '/coverage ratchet/,$$p' "$$D/ratchet.txt"; exit $$c
