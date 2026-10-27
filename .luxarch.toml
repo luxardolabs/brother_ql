@@ -30,3 +30,8 @@ exempt_reason = "library with no telemetry surface: it ships no service, route, 
 #
 # No [enums] / [hypertables] / [uuid] / [tenant] / [components] / [importlinter] — all are
 # fastapi-web concerns and inert for kind = "library".
+
+# Who pushes (owner ruling 2026-10-26, BROTHERQL-22): the agent pushes when its work lands.
+# brother_ql has an ordinary GitHub remote and is not airgapped.
+[agents]
+push = "agent"

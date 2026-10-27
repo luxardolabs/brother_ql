@@ -44,9 +44,9 @@ LUX_REGISTRY ?=
 # trails the published :latest (it is the first step of `make check`), and
 # `make guard-upgrade` bumps every pin and prints what newly bites. Keep the `:=` form —
 # guard-upgrade's sed rewrites exactly these three lines.
-LUXARCH_VERSION  := 0.289.3
-LUXLINT_VERSION  := 0.66.1
-LUXAUDIT_VERSION := 0.14.0
+LUXARCH_VERSION  := 0.327.0
+LUXLINT_VERSION  := 0.70.0
+LUXAUDIT_VERSION := 0.15.0
 
 LUXARCH_IMAGE  ?= $(LUX_REGISTRY)/luxardolabs/luxarch:$(LUXARCH_VERSION)
 LUXLINT_IMAGE  ?= $(LUX_REGISTRY)/luxardolabs/luxlint:$(LUXLINT_VERSION)
@@ -56,8 +56,22 @@ LUXAUDIT_IMAGE ?= $(LUX_REGISTRY)/luxardolabs/luxaudit:$(LUXAUDIT_VERSION)
 REGISTRY = $(LUX_REGISTRY)
 LUXLINT  = $(LUXLINT_IMAGE)
 
-# Every guard is mount-only and read-only on /repo.
-GUARD_RUN := docker run --rm -v $(PWD):/repo
+# luxarch:guard-run asset v1 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit guard-run`.
+# ── GUARD_RUN: how every guard sees this checkout ───────────────────────────────────────────────────
+# Emitted by `luxarch --emit guard-run`; paste it above the targets that run the guards (`status:`, and
+# `arch:` / `lint:` / `audit:` where they run a guard image).
+#
+# Agents work in linked worktrees (`.claude/worktrees/<ISSUE-KEY>`). A worktree's `.git` is a file
+# pointing into the MAIN checkout's `.git`, and the hooks keep their session state (the heartbeat) in
+# the main checkout's `.claude/`. A guard that mounts only the worktree at /repo can read neither:
+# every rule that reads git or the heartbeat goes INERT there, and `make status` run in a worktree
+# commits those INERT verdicts as the repo's record. So GUARD_RUN also mounts the main checkout,
+# read-only, at its own path, where the worktree's `.git` file points. In the main checkout itself
+# there is nothing more to mount. Not covered: a worktree whose `.git` names its gitdir by a RELATIVE
+# path (`worktree.useRelativePaths`), which resolves from /repo to somewhere else; its git-reading
+# rules stay INERT. Claude Code writes absolute pointers.
+GUARD_MAIN := $(shell d=$$(git -C "$(CURDIR)" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [ "$$(basename "$$d")" = .git ] && dirname "$$d")
+GUARD_RUN = docker run --rm -v "$(CURDIR)":/repo $(if $(filter-out $(CURDIR),$(GUARD_MAIN)),-v "$(GUARD_MAIN)":"$(GUARD_MAIN)":ro)
 
 # The test/build base. Matches requires-python (>=3.14) and .luxlint.toml [python].target,
 # so the suite runs on the interpreter the code targets (luxarch repo.python_version_consistent).
@@ -132,7 +146,8 @@ audit: ## Dependency CVEs via luxaudit (pinned; mount-only; live advisory feed; 
 # with dependency RANGES and no lockfile"). brother_ql ships ranges on purpose — pinning is
 # the consuming application's job — so this compiles today's resolution of those ranges.
 # A REPORTING artifact, never an install or deploy input. Rerun whenever
-# [project].dependencies changes: a stale compile is a stale audit.
+# [project].dependencies changes: a stale compile is a stale audit. `--upgrade` because uv
+# otherwise keeps the pins already in the output file, so a rerun never picks up a fixed release.
 #
 # Runs as the repo owner (like format/build), so the compiled file is never root-owned;
 # HOME=/tmp gives the user-level uv install and its cache somewhere writable.
@@ -140,7 +155,7 @@ audit-lock: ## Recompile requirements/audit.txt from the pyproject ranges (audit
 	docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOME=/tmp -v $(PWD):/repo -w /repo $(TAIL_IMAGE) \
 	  sh -c 'pip install -q --user --root-user-action=ignore uv >/dev/null \
 	         && mkdir -p requirements \
-	         && python -m uv pip compile pyproject.toml -o requirements/audit.txt'
+	         && python -m uv pip compile --upgrade pyproject.toml -o requirements/audit.txt'
 
 # The canonical fixer (FLEET-ONBOARDING-STANDARD §2.1): ruff safe fixes + ruff format with
 # the CHECKED config, and mdformat-gfm for Markdown (GFM tables survive). It prints which
@@ -201,7 +216,7 @@ test: ## pytest against the INSTALLED package (canonical config), then the cover
 # Both targets fire on their own via the committed git hooks in hooks/ (core.hooksPath,
 # installed by `luxlint --emit-hooks | sh`): pre-commit runs gitleaks-staged, pre-push runs
 # gitleaks. That is the belt; `make check` is the braces.
-# luxarch:gitleaks asset v14 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit gitleaks`.
+# luxarch:gitleaks asset v17 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit gitleaks`.
 # ── The privacy gate: EVERY surface a commit publishes ──────────────────────────────────────────
 # Emitted by `luxarch --emit gitleaks`. Drop in verbatim.
 #
@@ -261,11 +276,28 @@ GITLEAKS_IMAGE = $(if $(findstring /,$(LUXLINT)),$(dir $(LUXLINT)),zricethezav/)
 # v13: `/repo` is `$(CURDIR)`, this makefile's directory. v1-v12 mounted `$(PWD)`, the CALLER's shell
 # directory, so `make -C <repo> gitleaks` run from another repo scanned THAT repo's history with THAT
 # repo's config while the identity pass read this one: two repos' answers, reported as this one's.
+# v15: a WORKTREE's `.git` is a file naming `<main>/.git/worktrees/<name>`, outside the `/repo` mount, so
+# git failed in the container and gitleaks logged "not a git repository", scanned 0 commits and passed:
+# from every agent worktree, the history scan before a push read nothing. git's common directory is now
+# mounted at its own absolute path, where that pointer leads, and a scan that reports no commit scanned
+# while the repo has commits is refused, whatever the cause.
+# v16: every `tr` that reads history bytes runs under `LC_ALL=C`, as the `awk` beside it does. BSD/macOS
+# `tr` checks its input against the locale and aborts ("Illegal byte sequence") on a non-UTF-8 byte, so
+# on a Mac the commit-message pass died before gitleaks ran, and a credential in a commit message was
+# never reported.
+# v17: the same for every `sed`, `sort` and `grep` that reads history bytes. BSD `grep` erroring on a
+# non-UTF-8 author name inside `|| true` left the identity pass empty, so it PASSED having read nothing.
 gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks cover commit/push)
-	@set -e; C=$$(mktemp); trap 'rm -f "$$C"' EXIT INT TERM; \
+	@set -e; C=$$(mktemp); O=$$(mktemp); trap 'rm -f "$$C" "$$O"' EXIT INT TERM; \
+	G=$$(git -C "$(CURDIR)" rev-parse --path-format=absolute --git-common-dir); \
+	n=$$(git -C "$(CURDIR)" rev-list --count --all); \
 	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
-	docker run --rm -v "$(CURDIR)":/repo -v "$$C":/gl.toml:ro -w /repo \
-	  $(GITLEAKS_IMAGE) git /repo -c /gl.toml --redact -v --ignore-gitleaks-allow
+	rc=0; docker run --rm -v "$(CURDIR)":/repo -v "$$G":"$$G":ro -v "$$C":/gl.toml:ro -w /repo \
+	  $(GITLEAKS_IMAGE) git /repo -c /gl.toml --redact -v --ignore-gitleaks-allow > "$$O" 2>&1 || rc=$$?; \
+	cat "$$O"; [ "$$rc" -eq 0 ] || exit "$$rc"; \
+	if [ "$$n" -gt 0 ] && ! grep -Eq '(^|[^0-9])[1-9][0-9]* commits scanned' "$$O"; then \
+	  echo "REFUSING: gitleaks scanned no commit of a history holding $$n: the history scan read nothing (above)."; exit 1; \
+	fi
 	@# v12: what `gitleaks git` never reads. It scans git's PATCHES, and git prints no patch for a file it
 	@# treats as binary: a NUL byte, UTF-16 (a `Localizable.strings`), or a `binary` / `-diff` attribute.
 	@# A token in any of them reached the remote with "no leaks found". So every path git ever showed as
@@ -274,14 +306,14 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
 	git -c core.quotePath=false log --branches --tags HEAD --format= -p --no-ext-diff --no-textconv \
 	  > "$$D/patches"; \
-	sed -n 's|^Binary files .* and b/\(.*\) differ$$|\1|p' "$$D/patches" | sort -u > "$$D/binary"; \
+	LC_ALL=C sed -n 's|^Binary files .* and b/\(.*\) differ$$|\1|p' "$$D/patches" | LC_ALL=C sort -u > "$$D/binary"; \
 	if [ -s "$$D/binary" ]; then \
 	  mkdir "$$D/t" "$$D/none"; \
 	  while IFS= read -r f; do \
 	    mkdir -p "$$D/t/$$(dirname "$$f")"; \
 	    git -c core.quotePath=false log --branches --tags HEAD --format= -p --text --no-ext-diff \
 	      --no-textconv -- "$$f" > "$$D/p"; \
-	    grep -a '^+' "$$D/p" | tr -d '\000' > "$$D/t/$$f"; \
+	    LC_ALL=C grep -a '^+' "$$D/p" | LC_ALL=C tr -d '\000' > "$$D/t/$$f"; \
 	  done < "$$D/binary"; \
 	  docker run --rm -v "$$D/t":/scan:ro -w /scan -v "$$D/none":/none:ro -v "$$C":/gl.toml:ro \
 	    $(GITLEAKS_IMAGE) dir . -c /gl.toml --redact -v --ignore-gitleaks-allow \
@@ -296,7 +328,7 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	mkdir -p "$$D/t/commit-message" "$$D/t/tag-message" "$$D/none"; \
 	git log --branches --tags HEAD --format="$$N commit-message/%H%n%B" > "$$D/raw"; \
 	git for-each-ref refs/tags --format="$$N tag-message/%(objectname)%0a%(contents)" >> "$$D/raw"; \
-	tr -d '\000' < "$$D/raw" > "$$D/msgs"; \
+	LC_ALL=C tr -d '\000' < "$$D/raw" > "$$D/msgs"; \
 	LC_ALL=C awk -v n="$$N" -v d="$$D/t" \
 	  '$$1 == n && NF == 2 { if (f != "") close(f); f = d "/" $$2; printf "" > f; next } \
 	   f != "" { print > f }' "$$D/msgs"; \
@@ -314,7 +346,7 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	@set -e; C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
 	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
 	mkdir -p "$$D/t" "$$D/none"; \
-	git -c core.quotePath=false log --branches --tags HEAD --format= --name-only | sort -u > "$$D/t/paths"; \
+	git -c core.quotePath=false log --branches --tags HEAD --format= --name-only | LC_ALL=C sort -u > "$$D/t/paths"; \
 	git for-each-ref --format='%(refname:short)' refs/heads refs/tags > "$$D/t/ref-names"; \
 	docker run --rm -v "$$D/t":/scan:ro -w /scan -v "$$D/none":/none:ro -v "$$C":/gl.toml:ro \
 	  $(GITLEAKS_IMAGE) dir . -c /gl.toml --redact -v --ignore-gitleaks-allow \
@@ -327,11 +359,11 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	@# Walks what THIS repo publishes (branches, tags, HEAD), NOT `--all`: a remote-tracking ref caches the
 	@# remote's state, which during a scrub is by definition the un-rewritten history you are about to
 	@# force-push over — `--all` refused the verified fix, and any `git fetch` re-armed it.
-	@bad=$$(git log --branches --tags HEAD --pretty='%an <%ae>%n%cn <%ce>' 2>/dev/null | sort -u \
-	  | grep -vE '$(GIT_IDENTITY_OK)' || true); \
+	@bad=$$(git log --branches --tags HEAD --pretty='%an <%ae>%n%cn <%ce>' 2>/dev/null | LC_ALL=C sort -u \
+	  | LC_ALL=C grep -vE '$(GIT_IDENTITY_OK)' || true); \
 	if [ -n "$$bad" ]; then \
 	  echo "REFUSING: a non-fleet identity appears in commit METADATA (author/committer):"; \
-	  echo "$$bad" | sed 's/^/    /'; \
+	  echo "$$bad" | LC_ALL=C sed 's/^/    /'; \
 	  echo "gitleaks cannot see this — it scans diffs, not commit headers, so it reported no leaks."; \
 	  echo "An address here is attached to every affected commit forever, not to one line of one file."; \
 	  echo "Scrub per FLEET-ONBOARDING-STANDARD §2: mirror backup -> git filter-repo -> re-verify with"; \
@@ -364,12 +396,12 @@ gitleaks-staged: ## secret scan of the STAGED changes (run by hooks/pre-commit)
 	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
 	mkdir "$$D/t" "$$D/none"; \
 	git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR -z > "$$D/names"; \
-	tr '\000' '\n' < "$$D/names" | while IFS= read -r f; do \
+	LC_ALL=C tr '\000' '\n' < "$$D/names" | while IFS= read -r f; do \
 	  [ -n "$$f" ] || continue; \
 	  mkdir -p "$$D/t/$$(dirname "$$f")"; \
 	  git -c core.quotePath=false diff --cached --text --no-ext-diff --no-textconv -U0 -- "$$f" \
 	    > "$$D/p"; \
-	  grep -a '^+' "$$D/p" | tr -d '\000' > "$$D/t/$$f"; \
+	  LC_ALL=C grep -a '^+' "$$D/p" | LC_ALL=C tr -d '\000' > "$$D/t/$$f"; \
 	done; \
 	docker run --rm -v "$$D/t":/scan:ro -w /scan -v "$$D/none":/none:ro -v "$$C":/gl.toml:ro \
 	  $(GITLEAKS_IMAGE) dir . -c /gl.toml --redact -v --ignore-gitleaks-allow \
@@ -389,7 +421,7 @@ gitleaks-commit-msg: ## secret + denylist scan of the commit MESSAGE being writt
 	C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
 	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
 	mkdir -p "$$D/t/commit-message" "$$D/none"; \
-	tr -d '\000' < "$$M" > "$$D/t/commit-message/COMMIT_EDITMSG"; \
+	LC_ALL=C tr -d '\000' < "$$M" > "$$D/t/commit-message/COMMIT_EDITMSG"; \
 	docker run --rm -v "$$D/t":/scan:ro -w /scan -v "$$D/none":/none:ro -v "$$C":/gl.toml:ro \
 	  $(GITLEAKS_IMAGE) dir . -c /gl.toml --redact -v --ignore-gitleaks-allow \
 	  --gitleaks-ignore-path /none || { \
@@ -464,27 +496,41 @@ guard-version-check: ## FATAL: fail if any guard pin is behind the published :la
 	  fi; \
 	done; exit $$rc
 
-# luxarch:guard-upgrade asset v2 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit guard-upgrade`.
-# v2: the preview mounts `$(CURDIR)`, this makefile's directory (it edits ./Makefile there). v1 mounted
-# `$(PWD)`, the caller's directory, so `make -C <repo> guard-upgrade` previewed ANOTHER repo's new reds.
+# luxarch:guard-upgrade asset v4 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit guard-upgrade`.
+# Bumps each guard pin to its latest release and prints the rules the new luxarch adds (`--new-rules`).
+# The preview mounts `$(CURDIR)`, this makefile's directory, whatever directory `make -C` ran from.
+# Latest is the registry's `:latest`, or with REGISTRY empty (guards loaded from the release tarball)
+# the highest released `<guard>:X.Y.Z` on this machine, never `:local`. The pin is rewritten with `sed`
+# into a temporary file beside the Makefile (its mode copied first), renamed over it (`mv`, one atomic
+# step: a failed write leaves the Makefile as it was), then read back: the same on macOS and Linux.
+# A guard whose latest cannot be read is named and fails the run: "all pins already at latest" is
+# printed only when every guard was read.
 guard-upgrade:  ## Bump every guard pin to the published latest (prints what newly bites)
-	@for g in luxarch luxlint luxaudit; do \
-	  docker pull -q $(REGISTRY)/luxardolabs/$$g:latest >/dev/null 2>&1 || true; \
-	  latest=$$(docker run --rm $(REGISTRY)/luxardolabs/$$g:latest --version 2>/dev/null | awk '{print $$2}'); \
+	@unread=; checked=; bumped=; for g in luxarch luxlint luxaudit; do \
+	  if [ -n "$(REGISTRY)" ]; then \
+	    img=$(REGISTRY)/luxardolabs/$$g; src="$$img:latest"; \
+	    docker pull -q $$img:latest >/dev/null 2>&1 || true; \
+	    latest=$$(docker run --rm $$img:latest --version 2>/dev/null | awk '{print $$2}'); \
+	  else \
+	    img=$$g; src="a released $$g:X.Y.Z image on this machine (REGISTRY is empty)"; \
+	    latest=$$(docker images --format '{{.Tag}}' $$g 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1); \
+	  fi; \
 	  var=$$(echo $$g | tr a-z A-Z)_VERSION; \
 	  old=$$(sed -n -E "s/^$$var[[:space:]]*:=[[:space:]]*//p" Makefile); \
-	  if [ -z "$$old" ]; then echo "!! no $$var pin found in Makefile — NOT bumped"; continue; fi; \
-	  if [ -z "$$latest" ]; then echo "!! could not read $$g:latest — $$var left at $$old"; continue; fi; \
+	  if [ -z "$$old" ]; then echo "!! no $$var pin found in Makefile — NOT bumped"; unread="$$unread $$g"; continue; fi; \
+	  if [ -z "$$latest" ]; then echo "!! could not read $$src — $$var left at $$old"; unread="$$unread $$g"; continue; fi; \
 	  checked=1; \
-	  sed -i -E "s|^($$var[[:space:]]*:=[[:space:]]*).*|\\1$$latest|" Makefile; \
+	  tmp=$$(mktemp ./.guard-upgrade.XXXXXX) && cp -p Makefile "$$tmp" && sed -E "s|^($$var[[:space:]]*:=[[:space:]]*).*|\\1$$latest|" Makefile > "$$tmp" && mv -f "$$tmp" Makefile; rc=$$?; \
+	  if [ "$$rc" != 0 ]; then rm -f "$$tmp"; echo "!! could not rewrite Makefile (it is unchanged) — $$var NOT bumped"; exit 1; fi; \
 	  new=$$(sed -n -E "s/^$$var[[:space:]]*:=[[:space:]]*//p" Makefile); \
 	  if [ "$$new" != "$$latest" ]; then echo "!! $$var did NOT change (still $$new)"; exit 1; fi; \
 	  if [ "$$old" != "$$latest" ]; then echo "$$var $$old -> $$latest"; bumped=1; fi; \
-	  [ "$$g" = luxarch ] && [ "$$old" != "$$latest" ] && docker run --rm -v "$(CURDIR)":/repo $(REGISTRY)/luxardolabs/luxarch:$$latest --new-rules --since $$old || true; \
+	  [ "$$g" = luxarch ] && [ "$$old" != "$$latest" ] && docker run --rm -v "$(CURDIR)":/repo $$img:$$latest --new-rules --since $$old || true; \
 	done; \
-	if [ -n "$$bumped" ]; then echo "pins bumped — re-run make check"; \
-	elif [ -n "$$checked" ]; then echo "all pins already at latest"; \
-	else echo "!! could not reach the registry — NO pin was checked; currency NOT established"; exit 1; fi
+	if [ -n "$$bumped" ]; then echo "pins bumped — re-run make check"; fi; \
+	if [ -z "$$checked" ]; then echo "!! could not read any guard's latest (the registry, or with REGISTRY empty this machine's released images) — NO pin was checked; currency NOT established"; exit 1; fi; \
+	if [ -n "$$unread" ]; then echo "!! NOT checked:$$unread (no pin, or its latest could not be read) — currency NOT established"; exit 1; fi; \
+	if [ -z "$$bumped" ]; then echo "all pins already at latest"; fi
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nbrother_ql — make targets\n"} \

@@ -4,5 +4,5 @@ click==8.5.0
     # via brother-ql (pyproject.toml)
 packbits==0.6
     # via brother-ql (pyproject.toml)
-pillow==12.3.0
+pillow==13.0.0
     # via brother-ql (pyproject.toml)

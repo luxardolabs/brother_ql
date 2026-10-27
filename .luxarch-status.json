@@ -1,6 +1,6 @@
 {
   "guard": "luxarch",
-  "guard_version": "0.289.3",
+  "guard_version": "0.327.0",
   "repo": "/repo",
   "targets": [
     {
@@ -177,6 +177,17 @@
         "rule": "repo.fleet_skills_present",
         "status": "PASS",
         "since": "0.245.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": false,
+        "inert_reason": "",
+        "fix": "",
+        "example": ""
+      },
+      {
+        "rule": "repo.agent_push_declared",
+        "status": "PASS",
+        "since": "0.296.0",
         "violations": 0,
         "deferred": false,
         "inert": false,
@@ -813,7 +824,7 @@
       }
     ],
     "summary": {
-      "PASS": 35,
+      "PASS": 36,
       "FAIL": 0,
       "XFAIL": 0,
       "XPASS": 0,
@@ -821,12 +832,12 @@
     }
   },
   "summary": {
-    "PASS": 40,
+    "PASS": 41,
     "FAIL": 0,
     "XFAIL": 0,
     "XPASS": 0,
     "INERT": 32
   },
-  "commit": "8cfe24390ef98c73bcbd13425a0badcb7f8a966d",
-  "generated_at": "2026-10-13T03:10:20Z"
+  "commit": "c79f92bc9112ebcfb4a00e528f1c94fdc9fab96f",
+  "generated_at": "2026-10-27T01:52:19Z"
 }
