@@ -1,6 +1,6 @@
 # Development
 
-*Last grounded: 2026-09-26 — brother_ql 2.0.0.*
+*Last grounded: 2026-10-26 — brother_ql 2.0.0.*
 
 Everything runs in Docker. There is no local virtualenv to set up, and no host toolchain to install — lint, types, tests, dependency audit and the secret scan all run from pinned images.
 
@@ -13,20 +13,20 @@ make -k check # run every step even after one fails
 
 `check` is `guard-version-check honest lint mypy test arch audit gitleaks`. It is a prerequisite list, so it stops at the first failure; `-k` shows every verdict.
 
-| Target               | What it does                                                 |
-| -------------------- | ------------------------------------------------------------ |
-| `make onboard-check` | proves all three guards are wired and honest (not green)     |
-| `make lint`          | ruff + markdown + repo rules, canonical config               |
-| `make mypy`          | mypy, canonical config, mount-only                           |
-| `make test`          | pytest against the installed package                         |
-| `make arch`          | architecture conformance                                     |
-| `make audit`         | dependency CVEs against `requirements/audit.txt`             |
-| `make gitleaks`      | secret scan over the full history                            |
-| `make format`        | apply the canonical formatter (run before committing)        |
-| `make status`        | regenerate the committed guard-status files                  |
-| `make audit-lock`    | recompile `requirements/audit.txt` after a dependency change |
-| `make build`         | build the sdist + wheel                                      |
-| `make release`       | the library release ritual — see [Releases](#releases)       |
+| Target               | What it does                                                       |
+| -------------------- | ------------------------------------------------------------------ |
+| `make onboard-check` | proves all three guards are wired and honest (not green)           |
+| `make lint`          | ruff + markdown + repo rules, canonical config                     |
+| `make mypy`          | mypy, canonical config, mount-only                                 |
+| `make test`          | pytest against the installed package                               |
+| `make arch`          | architecture conformance                                           |
+| `make audit`         | dependency CVEs against `requirements/audit.txt`                   |
+| `make gitleaks`      | secret scan over the full history                                  |
+| `make format`        | apply the canonical formatter (run before committing)              |
+| `make status`        | regenerate the committed guard-status files                        |
+| `make audit-lock`    | recompile `requirements/audit.txt` to the newest admitted releases |
+| `make build`         | build the sdist + wheel                                            |
+| `make release`       | the library release ritual — see [Releases](#releases)             |
 
 `make help` lists them all.
 
@@ -79,7 +79,7 @@ tests/
 
 `[project].dependencies` is exactly what the package imports: `click` (CLI), `packbits` (raster compression), `Pillow` (imaging). There is no `dev` extra — the tooling comes from the pinned images.
 
-`requirements/audit.txt` is a compiled, audit-only pin of those ranges so the dependency scanner has concrete versions to check. Nothing installs from it. Regenerate it with `make audit-lock` whenever `[project].dependencies` changes; a stale compile is a stale audit.
+`requirements/audit.txt` is a compiled, audit-only pin of those ranges so the dependency scanner has concrete versions to check. Nothing installs from it. `make audit-lock` resolves the newest release each range admits (`uv pip compile --upgrade`), so run it whenever `[project].dependencies` changes and before trusting a clean `make audit`: a stale compile is a stale audit.
 
 ## Releases
 

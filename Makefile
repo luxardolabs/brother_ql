@@ -91,7 +91,7 @@ SKIP_NO_REGISTRY = if [ -z "$(LUX_REGISTRY)" ]; then echo "$@: LUX_REGISTRY unse
 # ruff → types → tests → architecture → dependency CVEs → secrets. It is a prerequisite
 # list, so make stops at the FIRST failing step — loudly, never silently. To see every
 # step's verdict past a red, run `make -k check`; for the full phase-ordered red board,
-# `docker run --rm -v $(PWD):/repo $(LUXARCH_IMAGE) --plan`.
+# `$(GUARD_RUN) $(LUXARCH_IMAGE) --plan` (GUARD_RUN also mounts a worktree's main `.git`).
 check: guard-version-check honest lint mypy test arch audit gitleaks ## THE fleet gate — every guard, in order
 
 # FLEET-ONBOARDING-STANDARD §5: proves the repo is ONBOARDED (all three guards wired and
@@ -151,8 +151,8 @@ audit: ## Dependency CVEs via luxaudit (pinned; mount-only; live advisory feed; 
 #
 # Runs as the repo owner (like format/build), so the compiled file is never root-owned;
 # HOME=/tmp gives the user-level uv install and its cache somewhere writable.
-audit-lock: ## Recompile requirements/audit.txt from the pyproject ranges (audit-only; rerun when deps change)
-	docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOME=/tmp -v $(PWD):/repo -w /repo $(TAIL_IMAGE) \
+audit-lock: ## Recompile requirements/audit.txt from the pyproject ranges (audit-only; rerun when deps change or before trusting make audit)
+	docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOME=/tmp -v "$(CURDIR)":/repo -w /repo $(TAIL_IMAGE) \
 	  sh -c 'pip install -q --user --root-user-action=ignore uv >/dev/null \
 	         && mkdir -p requirements \
 	         && python -m uv pip compile --upgrade pyproject.toml -o requirements/audit.txt'
@@ -163,7 +163,7 @@ audit-lock: ## Recompile requirements/audit.txt from the pyproject ranges (audit
 # or `mdformat` — either one formats with a config the gate does not check.
 format: ## Apply every canonical formatter in place (luxlint --format) — writes to host
 	@$(SKIP_NO_REGISTRY); \
-	docker run --rm --user $(REPO_UID):$(REPO_GID) -v $(PWD):/repo $(LUXLINT_IMAGE) --format
+	docker run --rm --user $(REPO_UID):$(REPO_GID) -v "$(CURDIR)":/repo $(LUXLINT_IMAGE) --format
 
 # The canonical pytest config is emitted by luxlint and run in the tail image — a local
 # pytest config is a red (test.no_local_pytest_config).
@@ -195,14 +195,14 @@ format: ## Apply every canonical formatter in place (luxlint --format) — write
 test: ## pytest against the INSTALLED package (canonical config), then the coverage ratchet
 	@set +e; $(SKIP_NO_REGISTRY); D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT INT TERM; \
 	$(GUARD_RUN) $(LUXLINT_IMAGE) --emit-config pytest > "$$D/pytest.ini" || exit 2; \
-	docker run --rm -v $(PWD):/repo:ro -w /repo -v "$$D":/out -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) \
+	docker run --rm -v "$(CURDIR)":/repo:ro -w /repo -v "$$D":/out -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) \
 	  sh -c 'pip install -q --root-user-action=ignore pytest pytest-asyncio coverage >/dev/null \
 	         && pip install -q --root-user-action=ignore . >/dev/null \
 	         && export COVERAGE_CORE=sysmon COVERAGE_FILE=/out/.coverage \
 	         && python -m coverage run --branch --source=brother_ql -m pytest -c /out/pytest.ini --rootdir=/repo -p no:cacheprovider \
 	         && python -m coverage report --precision=2 > /out/coverage.txt'; rc=$$?; \
 	[ $$rc -eq 0 ] || exit $$rc; \
-	c=0; docker run --rm -i -v $(PWD):/repo $(LUXLINT_IMAGE) --coverage-ratchet < "$$D/coverage.txt" > "$$D/ratchet.txt" || c=$$?; \
+	c=0; docker run --rm -i -v "$(CURDIR)":/repo $(LUXLINT_IMAGE) --coverage-ratchet < "$$D/coverage.txt" > "$$D/ratchet.txt" || c=$$?; \
 	sed -n '/coverage ratchet/,$$p' "$$D/ratchet.txt"; exit $$c
 
 ##@ Secrets
@@ -462,7 +462,7 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 ##@ Build
 
 build: ## Build the sdist + wheel in Docker (hatchling; version from VERSION)
-	docker run --rm --user $(REPO_UID):$(REPO_GID) -v $(PWD):/repo -w /repo $(TAIL_IMAGE) \
+	docker run --rm --user $(REPO_UID):$(REPO_GID) -v "$(CURDIR)":/repo -w /repo $(TAIL_IMAGE) \
 	  sh -c 'pip install -q --root-user-action=ignore build >/dev/null && python -m build --outdir dist'
 
 ##@ Meta
