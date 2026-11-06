@@ -252,17 +252,6 @@ override REFUSE_OTHER_TREE = $(if $(and $(filter command,$(origin CURDIR)),$(if 
 # that reads it, so that comes first. It holds under a dry run too: it is how one would be faked.
 override REFUSE_IGNORED = $(if $(filter command override,$(origin MAKEFLAGS))$(filter command,$(origin GNUMAKEFLAGS)),$(error REFUSING: MAKEFLAGS or GNUMAKEFLAGS was set from the command line, so make $@ cannot tell which flags are in force: pass make's flags as flags))$(if $(or $(findstring i,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring t,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring e,$(filter-out -%,$(firstword $(MAKEFLAGS))))),$(error REFUSING: make -i ignores failures, -t touches what it should run and -e lets the environment override the makefile, so make $@ could report what never passed: run it without them))
 
-# The one recipe that publishes takes no arguments: one rule, not a list of spellings, because three
-# adversarial rounds each passed a list in a new spelling. MAKEFLAGS is what the gate's sub-make
-# inherits, so it must be empty: that takes in every flag that could reach the gate, --eval and -I
-# (`-o` and `-C` never reach it and are not refused, so the gate still runs in full). A command-line
-# variable shows there too, and is checked by origin as well. MAKEFILES and the settings named here
-# come through the environment; the settings belong in Makefile.local. Dry runs pass:
-# they are how the guards read this makefile, and a line naming $(MAKE) runs under `-n` with `-n` on.
-# Stated limit, as check-gate states it: a second makefile given with `-f` is part of the makefile as
-# far as make can tell. It is not checked: that makefile could reset whatever the check would read.
-override REFUSE_ARGUMENTS = $(if $(guard_dry),,$(if $(strip $(MAKEFLAGS)),$(error REFUSING: make $@ takes no flags or variables, and got: $(MAKEFLAGS). Run it bare from the checkout))$(foreach v,$(.VARIABLES),$(if $(filter command,$(origin $(v))),$(error REFUSING: make $@ takes no variables, and got $(v) on the command line. Run it bare from the checkout)))$(if $(strip $(MAKEFILES)),$(error REFUSING: MAKEFILES ($(MAKEFILES)) reads other makefiles first: unset it))$(foreach v,MAKE MAKE_COMMAND SHELL .SHELLFLAGS LUX_REGISTRY LUXARCH_IMAGE LUXLINT_IMAGE LUXAUDIT_IMAGE TAIL_IMAGE GIT_IDENTITY_OK,$(if $(filter environment%,$(origin $(v))),$(error REFUSING: $(v) comes from the $(origin $(v)), so the caller chose how make $@ runs: unset it, and set it in Makefile.local if it is a setting))))
-
 ##@ Gates
 
 # luxarch:check-gate asset v3 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit check-gate`.
@@ -752,8 +741,17 @@ RELEASE_VERSION := $(shell cat VERSION 2>/dev/null)
 # mentions $(MAKE) even under `make -n`, so a single-line recipe would really tag, push and
 # publish on a dry run. Under `make -n` the gate exits 1 with no verdict, which ends the dry run
 # there, so it prints neither the tag nor the publish.
+# It takes no arguments: one rule, not a list of spellings. Three rounds passed a list in a new
+# spelling, and a check reading make's own variables cannot hold, because makefile text from `--eval`
+# rewrites them (`release: MAKEFLAGS:=`, `release: guard_dry:=n`). So the first line reads how make
+# was really started, from /proc, which make cannot rewrite. It is written out here, not in a
+# variable, and asks for a positive `ok`, so a shell that prints nothing is refused. An expansion
+# error stops make under `.IGNORE`, where a failing shell line would not. `-n` is matched exactly,
+# so it is a real dry run. Stated limit: caller-supplied makefile text is code. A `$$(shell ...)` in
+# `--eval`, or a planted program on PATH, runs before or instead of any check, and is no more than
+# running git and gh by hand.
 release: ## Tag, push, build and publish the GitHub Release for the VERSION file's version
-	+@$(REFUSE_IGNORED)$(REFUSE_ARGUMENTS)true
+	+@$(if $(filter-out /bin/sh -c,$(SHELL) $(.SHELLFLAGS)),$(error REFUSING: SHELL or .SHELLFLAGS was changed, so make $@ cannot read how it was started))$(if $(filter ok,$(shell a=$$(tr '\0' ' ' </proc/$$PPID/cmdline | cut -d' ' -f2-); case "$$a" in (release\ |-n\ release\ |release\ -n\ ) ;; (*) echo arguments; exit;; esac; if [ ! -r /proc/$$PPID/environ ] || tr '\0' '\n' </proc/$$PPID/environ | grep -qE '^(MAKEFLAGS|GNUMAKEFLAGS|MAKEFILES|MAKEOVERRIDES|MAKE|MAKE_COMMAND|\.SHELLFLAGS|LUX_REGISTRY|LUXARCH_IMAGE|LUXLINT_IMAGE|LUXAUDIT_IMAGE|TAIL_IMAGE|GIT_IDENTITY_OK)='; then echo environment; else echo ok; fi)),,$(error REFUSING: make $@ takes no arguments, and nothing that steers it may come from the environment (MAKEFLAGS, GNUMAKEFLAGS, MAKEFILES, an image or registry). Run it bare on Linux, and put settings in Makefile.local))true
 	@set -e; \
 	[ -n "$(RELEASE_VERSION)" ] || { echo "release: VERSION is empty"; exit 1; }; \
 	[ -z "$$(git status --porcelain)" ] || { echo "release: working tree is dirty — commit first"; exit 1; }; \

@@ -88,7 +88,7 @@ tests/
 
 Versions are SemVer, and the `VERSION` file is the only place the number appears — `pyproject.toml` reads it, and `__version__` derives from installed metadata.
 
-A release is a tag **plus** a release object: `make release` runs the gate, builds the artifacts, creates the annotated `v<VERSION>` tag, pushes, and publishes the GitHub Release with that version's changelog section as the notes and the sdist and wheel attached. It takes no arguments: any make flag that would reach the gate, any variable on the command line, or an image or registry from the environment is refused, so set those in `Makefile.local`. The ordered ritual is `.claude/skills/release/SKILL.md`; what shipped in each version is [`CHANGELOG.md`](../CHANGELOG.md).
+A release is a tag **plus** a release object: `make release` runs the gate, builds the artifacts, creates the annotated `v<VERSION>` tag, pushes, and publishes the GitHub Release with that version's changelog section as the notes and the sdist and wheel attached. It takes no arguments and runs on Linux only: it reads how make was started from `/proc`, and refuses any argument other than `-n`, and any make flags, image or registry from the environment. Set those in `Makefile.local`. The ordered ritual is `.claude/skills/release/SKILL.md`; what shipped in each version is [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Contributing
 

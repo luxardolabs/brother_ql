@@ -82,27 +82,32 @@ def test_flags_hidden_from_makeflags_are_refused_before_makeflags_is_read():
     assert text.index(hidden) < text.index("$(firstword $(MAKEFLAGS))")
 
 
-def test_release_takes_no_flags_and_no_command_line_variables():
-    text = definition("REFUSE_ARGUMENTS")
-    assert "$(if $(strip $(MAKEFLAGS)),$(error REFUSING" in text
-    assert "$(foreach v,$(.VARIABLES),$(if $(filter command,$(origin $(v)))" in text
-    # A caller's MAKEOVERRIDES hid --eval from a filtered reading of the flags.
-    assert "$(MAKEOVERRIDES)" not in text
+def test_release_judges_how_make_was_really_started_not_makes_variables():
+    first = recipe("release")[0]
+    assert first.startswith("+@$(if $(filter-out /bin/sh -c,$(SHELL) $(.SHELLFLAGS))")
+    assert "/proc/$$PPID/cmdline" in first
+    assert "/proc/$$PPID/environ" in first
+    assert "(release\\ |-n\\ release\\ |release\\ -n\\ ) ;;" in first
+    # A positive answer, so a shell that prints nothing is refused.
+    assert "$(if $(filter ok,$(shell " in first
+    assert first.endswith("true")
+    # Each of these can be rewritten by target-specific text from --eval.
+    for variable in ("MAKEFLAGS", "guard_dry", "REFUSE_"):
+        assert f"$({variable}" not in first
 
 
-def test_release_refuses_how_it_runs_being_chosen_from_the_environment():
-    text = definition("REFUSE_ARGUMENTS")
-    assert "$(strip $(MAKEFILES))" in text
-    start = text.index("$(foreach v,MAKE ")
-    names = text[start + len("$(foreach v,") : text.index(",", start)].split()
-    # The image the artifacts are built on, and where the guards that judge them come from.
-    for name in ("MAKE", "SHELL", "LUX_REGISTRY", "LUXLINT_IMAGE", "TAIL_IMAGE"):
+def test_release_refuses_steering_from_the_environment():
+    first = recipe("release")[0]
+    start = first.index("grep -qE '^(") + len("grep -qE '^(")
+    names = first[start : first.index(")=", start)].split("|")
+    for name in (
+        "MAKEFLAGS",
+        "GNUMAKEFLAGS",
+        "MAKEFILES",
+        "LUX_REGISTRY",
+        "TAIL_IMAGE",
+    ):
         assert name in names
-    assert "$(filter environment%,$(origin $(v)))" in text
-
-
-def test_release_runs_every_refusal_on_its_first_line():
-    assert recipe("release")[0] == "+@$(REFUSE_IGNORED)$(REFUSE_ARGUMENTS)true"
 
 
 def test_the_other_tree_refusal_cannot_be_overridden_and_spares_this_tree():
