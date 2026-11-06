@@ -4,6 +4,39 @@ All notable changes to brother_ql. This is a **library**, so it is [SemVer](http
 
 Each released version is anchored by an annotated `v<VERSION>` git tag and a matching GitHub Release carrying that version's notes.
 
+## 2.0.1 — 2026-11-06
+
+Docs, packaging and tooling. No library code changed: `git diff v2.0.0..v2.0.1 -- src` is empty, so the installed package behaves exactly as 2.0.0 does.
+
+### Features
+
+- **The docs are a `docs/` tree**: usage, API, CLI, configuration, advanced, troubleshooting and development pages replace the long README and `ADVANCED.md`. The README's sections describing a repo layout that no longer exists are gone.
+- **The sdist now carries `CHANGELOG.md` and `docs/`.**
+
+### Fixes
+
+- **`make check` and `make release` refuse an empty `LUX_REGISTRY`** (BROTHERQL-27). Every guard-backed target skips without one, so the gate could exit 0 having judged almost nothing, and `make release` would then publish.
+- **`make -i release` no longer publishes past a red gate** (BROTHERQL-27), and `release` refuses `-t`, `-e`, `--eval`, `-I`, and a `MAKE` or `SHELL` chosen from outside. Other ways to talk the recipe past a red by typing make arguments remain open (BROTHERQL-41).
+- **`make test` holds a heavy-job slot and runs under the memory cap**, like every guard run (BROTHERQL-27).
+- **`guard-version-check` fails when it cannot pull or read the latest image**, rather than reading a stale or missing one as current (BROTHERQL-27).
+- **`onboard-check` judges the audit's exit status** and no longer runs its guards under `make -n` (BROTHERQL-27).
+- **Recipes mount the checkout quoted and by its own path**, not the caller's directory, so a directory name holding shell syntax stays a name and `make -C` reads the right tree (BROTHERQL-22, BROTHERQL-27).
+- **`make test` emits its pytest config checked and per run, and reports coverage to two decimals**, so 89.5% no longer rounds up past a floor of 90 (BROTHERQL-19, BROTHERQL-21).
+
+### Infra / Ops
+
+- Fleet guards at luxarch 0.345.2, luxlint 0.74.0 and luxaudit 0.16.0, with guard-run v7, gitleaks v20 and hooks re-emitted (BROTHERQL-18, BROTHERQL-20, BROTHERQL-22, BROTHERQL-27, BROTHERQL-43).
+- `make check` is the emitted check-gate: every leg runs, and it fails at the end naming each red one. `make -k check` is no longer needed.
+- `git commit` also scans the commit message for secrets (`hooks/commit-msg`). Guard-status files and a signed LuxPM sync receipt are committed.
+- `requirements/audit.txt` resolves `pillow==13.0.0`. It is audit-only: nothing installs from it.
+
+### Notes
+
+- **Upgrading from 2.0.0:** nothing to do.
+- **Pillow's floor is unchanged at `>=10.0`** (BROTHERQL-23), so a consumer can still resolve an older Pillow with known CVEs. If you pin dependencies, pin `Pillow>=13.0.0`.
+- Guard escalations raised from this repo and fixed upstream: BROTHERQL-17 (luxarch 0.255.0), -19 (luxlint 0.64.0), -21 (luxlint 0.67.0), -24 and -25 (luxarch 0.329.0). Open escalations against the guards, including the secret-scan gate, are BROTHERQL-28 to -38 and -40.
+- `make check` is green at this release: lint 20/0 (3 N/A), mypy 0, 87 tests, coverage 90.36%, arch 43/0 (35 N/A), audit 3 packages 0 vulnerable, gitleaks clean. No `## Known reds`.
+
 ## 2.0.0 — 2026-09-26
 
 Fleet-guard onboarding, and the config-override feature finally does what the docs always said.
