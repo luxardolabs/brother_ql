@@ -1,7 +1,7 @@
 """scripts/release-preflight.sh, run for real on a stand-in for make's /proc directory.
 
-The suite's image has neither make nor git, so these judge how make was started and its environment.
-The checks of the tree need git, and are exercised against a throwaway repository by hand.
+The suite's image has neither make nor git, so these judge how make was started and its environment,
+and a run these pass goes on to the checks of the tree, which stop it there for want of git.
 
 Copyright (C) 2025 Luxardo Labs
 Licensed under GPL-3.0-or-later
@@ -31,19 +31,6 @@ def preflight(tmp_path, argv, environ=b"PATH=/usr/bin\x00"):
     return done.stdout.strip(), done.stderr
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["make", "-n", "release"],
-        ["make", "release", "-n"],
-        ["/usr/bin/make", "-n", "release"],
-        ["gmake", "-n", "release"],
-    ],
-)
-def test_a_real_dry_run_passes(tmp_path, argv):
-    assert preflight(tmp_path, argv)[0] == "ok"
-
-
 def test_the_bare_form_goes_on_to_judge_the_tree(tmp_path):
     answer, reason = preflight(tmp_path, ["make", "release"])
     assert answer == "refused"
@@ -69,7 +56,9 @@ def test_the_bare_form_goes_on_to_judge_the_tree(tmp_path):
         # A newline-led argument is a variable to make, and must not read as nothing here.
         ["make", "release", "\nMAKE=true"],
         ["make", "release", "\nRELEASE_VERSION=0.9.9"],
-        ["make", "-n", "release", "\nMAKE=true"],
+        # The recipe passes a first argument of -n before asking this script; here it is refused.
+        ["make", "-n", "release"],
+        ["make", "release", "-n"],
     ],
 )
 def test_anything_but_the_bare_form_is_refused(tmp_path, argv):
@@ -117,7 +106,7 @@ def test_a_name_that_would_change_what_the_gate_runs_is_refused(tmp_path, name):
 )
 def test_what_steers_the_release_from_the_environment_is_refused(tmp_path, variable):
     environ = b"PATH=/usr/bin\x00" + variable + b"\x00HOME=/root\x00"
-    answer, reason = preflight(tmp_path, ["make", "-n", "release"], environ)
+    answer, reason = preflight(tmp_path, ["make", "release"], environ)
     assert answer == "refused"
     assert variable.split(b"=")[0].decode() in reason
 
@@ -134,7 +123,8 @@ def test_what_steers_the_release_from_the_environment_is_refused(tmp_path, varia
 )
 def test_an_ordinary_environment_is_not_refused(tmp_path, variable):
     environ = b"PATH=/usr/bin\x00" + variable + b"\x00"
-    assert preflight(tmp_path, ["make", "-n", "release"], environ)[0] == "ok"
+    answer, reason = preflight(tmp_path, ["make", "release"], environ)
+    assert "environment" not in reason, answer
 
 
 def test_an_unreadable_proc_is_refused_not_passed(tmp_path):

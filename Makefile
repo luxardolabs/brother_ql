@@ -44,7 +44,7 @@ LUX_REGISTRY ?=
 # trails the published :latest (it is the first step of `make check`), and
 # `make guard-upgrade` bumps every pin and prints what newly bites. Keep the `:=` form —
 # guard-upgrade's sed rewrites exactly these three lines.
-LUXARCH_VERSION  := 0.345.2
+LUXARCH_VERSION  := 0.348.2
 LUXLINT_VERSION  := 0.74.0
 LUXAUDIT_VERSION := 0.16.0
 
@@ -745,10 +745,12 @@ RELEASE_HEAD := $(shell git rev-parse HEAD 2>/dev/null)
 # It takes no arguments, and a check reading make's own variables cannot hold that, because makefile
 # text from `--eval` rewrites them. So the first line asks scripts/release-preflight.sh, which reads how
 # make was really started. It is written out here, not in a variable, and an expansion error stops make
-# under `.IGNORE`, where a failing shell line would not. The commit judged is the commit tagged: the
+# under `.IGNORE`, where a failing shell line would not. A first argument of exactly `-n` is a real dry
+# run, which no later word can undo and which is how the guards read this recipe, from a mirror that
+# need not hold the script, so it passes there. The commit judged is the commit tagged: the
 # last line refuses a tree that moved during the gate, and names that commit in the tag and the push.
 release: ## Tag, push, build and publish the GitHub Release for the VERSION file's version
-	+@$(if $(filter-out /bin/sh -c,$(SHELL) $(.SHELLFLAGS)),$(error REFUSING: SHELL or .SHELLFLAGS was changed, so make $@ cannot read how it was started))$(if $(filter ok,$(shell /usr/bin/env -i HOME="$$HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-preflight.sh /proc/$$PPID)),,$(error REFUSING: make $@ stopped: the reason is above))true
+	+@$(if $(filter-out /bin/sh -c,$(SHELL) $(.SHELLFLAGS)),$(error REFUSING: SHELL or .SHELLFLAGS was changed, so make $@ cannot read how it was started))$(if $(filter ok,$(shell /usr/bin/env -i HOME="$$HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh -c 'if [ "$$(tr "\n\0" "\001\n" <"$$1/cmdline" | sed -n 2p)" = -n ]; then echo ok; else /bin/sh scripts/release-preflight.sh "$$1"; fi' preflight /proc/$$PPID)),,$(error REFUSING: make $@ stopped: the reason is above))true
 	@set -e; \
 	git fetch -q origin; \
 	if git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then \

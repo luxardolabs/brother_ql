@@ -87,7 +87,10 @@ def test_release_asks_the_preflight_for_a_positive_answer_in_an_expansion():
     assert first.startswith("+@$(if $(filter-out /bin/sh -c,$(SHELL) $(.SHELLFLAGS))")
     assert "$(if $(filter ok,$(shell /usr/bin/env -i " in first
     assert "PATH=/usr/bin:/bin" in first
-    assert "/bin/sh scripts/release-preflight.sh /proc/$$PPID" in first
+    assert '/bin/sh scripts/release-preflight.sh "$$1"' in first
+    assert "preflight /proc/$$PPID)" in first
+    # Only a first argument of exactly -n is a dry run: an option's value could spell it elsewhere.
+    assert 'sed -n 2p)" = -n ]; then echo ok;' in first
     assert first.endswith("true")
     # Each of these can be rewritten by target-specific text from --eval.
     for variable in ("MAKEFLAGS", "guard_dry", "REFUSE_"):
