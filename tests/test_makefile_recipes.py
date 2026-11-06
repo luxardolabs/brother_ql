@@ -74,18 +74,35 @@ def test_the_refusal_macros_read_the_flags_that_would_discard_a_red():
     assert "$(error REFUSING" in text
 
 
-def test_release_refuses_outside_makefile_text_and_a_chosen_make():
-    text = definition("REFUSE_OUTSIDE_TEXT")
-    assert "--eval=% -I% --include-dir%" in text
+def test_flags_hidden_from_makeflags_are_refused_before_makeflags_is_read():
+    text = definition("REFUSE_IGNORED")
+    hidden = "$(filter command override,$(origin MAKEFLAGS))"
+    assert hidden in text
+    assert "$(filter command,$(origin GNUMAKEFLAGS))" in text
+    assert text.index(hidden) < text.index("$(firstword $(MAKEFLAGS))")
+
+
+def test_release_takes_no_flags_and_no_command_line_variables():
+    text = definition("REFUSE_ARGUMENTS")
+    assert "$(if $(strip $(MAKEFLAGS)),$(error REFUSING" in text
+    assert "$(foreach v,$(.VARIABLES),$(if $(filter command,$(origin $(v)))" in text
+    # A caller's MAKEOVERRIDES hid --eval from a filtered reading of the flags.
+    assert "$(MAKEOVERRIDES)" not in text
+
+
+def test_release_refuses_how_it_runs_being_chosen_from_the_environment():
+    text = definition("REFUSE_ARGUMENTS")
     assert "$(strip $(MAKEFILES))" in text
-    assert "$(foreach v,MAKE MAKE_COMMAND SHELL .SHELLFLAGS," in text
+    start = text.index("$(foreach v,MAKE ")
+    names = text[start + len("$(foreach v,") : text.index(",", start)].split()
+    # The image the artifacts are built on, and where the guards that judge them come from.
+    for name in ("MAKE", "SHELL", "LUX_REGISTRY", "LUXLINT_IMAGE", "TAIL_IMAGE"):
+        assert name in names
+    assert "$(filter environment%,$(origin $(v)))" in text
 
 
 def test_release_runs_every_refusal_on_its_first_line():
-    assert (
-        recipe("release")[0]
-        == "+@$(REFUSE_IGNORED)$(REFUSE_OUTSIDE_TEXT)$(REFUSE_OTHER_TREE)true"
-    )
+    assert recipe("release")[0] == "+@$(REFUSE_IGNORED)$(REFUSE_ARGUMENTS)true"
 
 
 def test_the_other_tree_refusal_cannot_be_overridden_and_spares_this_tree():

@@ -241,19 +241,27 @@ SKIP_NO_REGISTRY = if [ -z "$(LUX_REGISTRY)" ]; then echo "$@: LUX_REGISTRY unse
 # This checkout as a bind-mount source, quoted so a directory name holding shell syntax stays a name.
 override CHECKOUT = '$(subst ','\'',$(CURDIR))'
 
-# A CURDIR on the command line is how GUARD_RUN is told to judge another tree. `status` and `release`
-# act in this tree (stamp its commit, tag it), so they refuse one. Dry runs are how the guards read
-# this makefile, so they pass.
+# A CURDIR on the command line is how GUARD_RUN is told to judge another tree. `status` acts in this
+# tree (it stamps its commit), so it refuses one; `release` takes no command-line variable at all.
+# Dry runs are how the guards read this makefile, so they pass.
 override REFUSE_OTHER_TREE = $(if $(and $(filter command,$(origin CURDIR)),$(if $(guard_dry),,1)),$(if $(call guard_same,$(CURDIR),$(GUARD_PWD)),,$(error REFUSING: CURDIR on the command line names another tree, so $@ would read it and act in this one: run make -C <that tree>)))
 
 # Refused as make expands a recipe's first line, a `+` line that `-t` runs too: an expansion $(error)
 # stops make under `-i`, and a recipe's own refusal in a sub-make is discarded by a parent's `-i`.
-override REFUSE_IGNORED = $(if $(or $(findstring i,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring t,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring e,$(filter-out -%,$(firstword $(MAKEFLAGS))))),$(error REFUSING: make -i ignores failures, -t touches what it should run and -e lets the environment override the makefile, so make $@ could report what never passed: run it without them))
+# MAKEFLAGS typed as a variable, or emptied with --eval, hides the flags in force from every test
+# that reads it, so that comes first. It holds under a dry run too: it is how one would be faked.
+override REFUSE_IGNORED = $(if $(filter command override,$(origin MAKEFLAGS))$(filter command,$(origin GNUMAKEFLAGS)),$(error REFUSING: MAKEFLAGS or GNUMAKEFLAGS was set from the command line, so make $@ cannot tell which flags are in force: pass make's flags as flags))$(if $(or $(findstring i,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring t,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring e,$(filter-out -%,$(firstword $(MAKEFLAGS))))),$(error REFUSING: make -i ignores failures, -t touches what it should run and -e lets the environment override the makefile, so make $@ could report what never passed: run it without them))
 
-# The ways check-gate lists for a caller to change how a recipe runs, for the one recipe that
-# publishes. Stated limit, as check-gate states it: a second makefile given with `-f` is part of the
-# makefile as far as make can tell, and a variable set with `?=` takes a value from the environment.
-override REFUSE_OUTSIDE_TEXT = $(if $(guard_dry),,$(if $(filter --eval=% -I% --include-dir%,$(filter-out $(MAKEOVERRIDES),$(MAKEFLAGS))),$(error REFUSING: --eval or -I adds makefile text from outside, which could change what make $@ runs: run it without them))$(if $(strip $(MAKEFILES)),$(error REFUSING: MAKEFILES ($(MAKEFILES)) reads other makefiles first: unset it))$(foreach v,MAKE MAKE_COMMAND SHELL .SHELLFLAGS,$(if $(filter environment% command,$(origin $(v))),$(error REFUSING: $(v) comes from the $(origin $(v)), so the caller chose how make $@ runs: set it in the makefile))))
+# The one recipe that publishes takes no arguments: one rule, not a list of spellings, because three
+# adversarial rounds each passed a list in a new spelling. MAKEFLAGS is what the gate's sub-make
+# inherits, so it must be empty: that takes in every flag that could reach the gate, --eval and -I
+# (`-o` and `-C` never reach it and are not refused, so the gate still runs in full). A command-line
+# variable shows there too, and is checked by origin as well. MAKEFILES and the settings named here
+# come through the environment; the settings belong in Makefile.local. Dry runs pass:
+# they are how the guards read this makefile, and a line naming $(MAKE) runs under `-n` with `-n` on.
+# Stated limit, as check-gate states it: a second makefile given with `-f` is part of the makefile as
+# far as make can tell. It is not checked: that makefile could reset whatever the check would read.
+override REFUSE_ARGUMENTS = $(if $(guard_dry),,$(if $(strip $(MAKEFLAGS)),$(error REFUSING: make $@ takes no flags or variables, and got: $(MAKEFLAGS). Run it bare from the checkout))$(foreach v,$(.VARIABLES),$(if $(filter command,$(origin $(v))),$(error REFUSING: make $@ takes no variables, and got $(v) on the command line. Run it bare from the checkout)))$(if $(strip $(MAKEFILES)),$(error REFUSING: MAKEFILES ($(MAKEFILES)) reads other makefiles first: unset it))$(foreach v,MAKE MAKE_COMMAND SHELL .SHELLFLAGS LUX_REGISTRY LUXARCH_IMAGE LUXLINT_IMAGE LUXAUDIT_IMAGE TAIL_IMAGE GIT_IDENTITY_OK,$(if $(filter environment%,$(origin $(v))),$(error REFUSING: $(v) comes from the $(origin $(v)), so the caller chose how make $@ runs: unset it, and set it in Makefile.local if it is a setting))))
 
 ##@ Gates
 
@@ -745,7 +753,7 @@ RELEASE_VERSION := $(shell cat VERSION 2>/dev/null)
 # publish on a dry run. Under `make -n` the gate exits 1 with no verdict, which ends the dry run
 # there, so it prints neither the tag nor the publish.
 release: ## Tag, push, build and publish the GitHub Release for the VERSION file's version
-	+@$(REFUSE_IGNORED)$(REFUSE_OUTSIDE_TEXT)$(REFUSE_OTHER_TREE)true
+	+@$(REFUSE_IGNORED)$(REFUSE_ARGUMENTS)true
 	@set -e; \
 	[ -n "$(RELEASE_VERSION)" ] || { echo "release: VERSION is empty"; exit 1; }; \
 	[ -z "$$(git status --porcelain)" ] || { echo "release: working tree is dirty — commit first"; exit 1; }; \
