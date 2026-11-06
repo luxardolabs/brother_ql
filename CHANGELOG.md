@@ -4,6 +4,25 @@ All notable changes to brother_ql. This is a **library**, so it is [SemVer](http
 
 Each released version is anchored by an annotated `v<VERSION>` git tag and a matching GitHub Release carrying that version's notes.
 
+## 2.0.2 — 2026-11-06
+
+**Upgrade to Pillow 13 before installing this release.** It requires `Pillow>=13.0`. The library API and code are unchanged: `git diff v2.0.1..v2.0.2 -- src` is empty.
+
+### Fixes
+
+- **Pillow's floor is raised from `>=10.0` to `>=13.0`** (BROTHERQL-23). Earlier releases have known CVEs, including arbitrary code execution (CVE-2023-50447), and could still be resolved under the old range. `make audit` scans only the newest release a range admits, so it could not see them. Auditing the lowest admitted versions now gives 3 packages, 0 vulnerable, where it gave 53 vulnerable, all of them Pillow. click's floor stays at `>=8.0`, which has no findings.
+
+### Infra / Ops
+
+- `tests/test_dependency_floors.py` fails if the Pillow floor drops below 13.0.
+- `docs/development.md` says why a dependency floor must itself exclude every release with a known advisory.
+
+### Notes
+
+- **Upgrading from 2.0.1:** if you hold Pillow at 10, 11 or 12, move to 13 first, because this release will not resolve against those versions. Nothing else is needed.
+- Open escalations against the guards, including the secret-scan gate, are unchanged: BROTHERQL-28 to -38 and -40.
+- `make check` is green at this release: lint 20/0 (3 N/A), mypy 0, 88 tests, coverage 90.36%, arch 43/0 (35 N/A), audit 3 packages 0 vulnerable, gitleaks clean. No `## Known reds`.
+
 ## 2.0.1 — 2026-11-06
 
 Docs, packaging and tooling. No library code changed: `git diff v2.0.0..v2.0.1 -- src` is empty, so the installed package behaves exactly as 2.0.0 does.
