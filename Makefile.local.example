@@ -10,8 +10,18 @@
 #
 # With LUX_REGISTRY unset, `make lint` / `make arch` / `make format` / `make test` skip
 # cleanly with a message instead of failing on an unreachable pull — so a clean clone
-# without registry access still has a working Makefile.
+# without registry access still has a working Makefile. `make check` and `make release`
+# refuse instead: a gate of skips has judged nothing.
 
 # The private guard registry that hosts luxarch + luxlint.
 # (These images are private-registry only — they are never published to GHCR.)
 LUX_REGISTRY ?= docker.<your-private-registry>
+
+# Machine settings for heavy jobs (a full guard scan, the suite, the gate). Set them here only:
+# the Makefile refuses them from the environment and the command line.
+# How many run on this machine at once, across every checkout (default 3):
+# HEAVY_SLOTS := 3
+# Each container's memory cap (default: a share of the Docker VM's memory):
+# HEAVY_MEMORY := 6g
+# Each container's CPU cap (default: none):
+# HEAVY_CPUS := 4

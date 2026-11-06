@@ -1,6 +1,6 @@
 # Development
 
-*Last grounded: 2026-10-26 — brother_ql 2.0.0.*
+*Last grounded: 2026-11-05 — brother_ql 2.0.0.*
 
 Everything runs in Docker. There is no local virtualenv to set up, and no host toolchain to install — lint, types, tests, dependency audit and the secret scan all run from pinned images.
 
@@ -8,10 +8,11 @@ Everything runs in Docker. There is no local virtualenv to set up, and no host t
 
 ```sh
 make check    # the full gate, in canonical order
-make -k check # run every step even after one fails
 ```
 
-`check` is `guard-version-check honest lint mypy test arch audit gitleaks`. It is a prerequisite list, so it stops at the first failure; `-k` shows every verdict.
+`check` runs `guard-version-check` and `honest` first, and either one failing stops it. It then runs every leg of `lint mypy test arch audit gitleaks`, even past a failure, and fails at the end naming each red leg.
+
+With `LUX_REGISTRY` unset, a guard-backed target run on its own skips with a message, while `make check` and `make release` refuse, because a gate of skips has judged nothing. Run the Makefile from its own directory or with `make -C <dir>`: `make -f <path>` from elsewhere is refused.
 
 | Target               | What it does                                                       |
 | -------------------- | ------------------------------------------------------------------ |

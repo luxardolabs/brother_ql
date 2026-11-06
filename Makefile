@@ -44,7 +44,7 @@ LUX_REGISTRY ?=
 # trails the published :latest (it is the first step of `make check`), and
 # `make guard-upgrade` bumps every pin and prints what newly bites. Keep the `:=` form —
 # guard-upgrade's sed rewrites exactly these three lines.
-LUXARCH_VERSION  := 0.344.0
+LUXARCH_VERSION  := 0.345.0
 LUXLINT_VERSION  := 0.74.0
 LUXAUDIT_VERSION := 0.16.0
 
@@ -227,35 +227,106 @@ TAIL_IMAGE ?= python:3.14-slim
 REPO_UID := $(shell id -u)
 REPO_GID := $(shell id -g)
 
-# A clean clone without registry access still has a working Makefile: every guard-backed
-# target skips with a message instead of failing on an unreachable pull.
+# A clean clone without registry access still has a working Makefile: each guard-backed
+# target run on its own skips with a message instead of failing on an unreachable pull.
+# A skip is not a pass, so `check` (and `release`, through it) refuses an empty registry.
 SKIP_NO_REGISTRY = if [ -z "$(LUX_REGISTRY)" ]; then echo "$@: LUX_REGISTRY unset (see Makefile.local.example) — skipping"; exit 0; fi
+
+# This checkout as a bind-mount source, quoted so a directory name holding shell syntax stays a name.
+CHECKOUT = '$(subst ','\'',$(CURDIR))'
+
+# A CURDIR on the command line is how GUARD_RUN is told to judge another tree. `status` and `release`
+# act in this tree (stamp its commit, tag it), so they refuse one. Dry runs are how the guards read
+# this makefile, so they pass.
+REFUSE_OTHER_TREE = $(if $(and $(filter command,$(origin CURDIR)),$(if $(guard_dry),,1)),$(error REFUSING: CURDIR on the command line names another tree, so $@ would read it and act in this one: run make -C <that tree>))
 
 ##@ Gates
 
-# THE fleet gate, in the canonical order (FLEET-MAKEFILE-STANDARD): pin drift → honesty →
-# ruff → types → tests → architecture → dependency CVEs → secrets. It is a prerequisite
-# list, so make stops at the FIRST failing step — loudly, never silently. To see every
-# step's verdict past a red, run `make -k check`; for the full phase-ordered red board,
-# `$(GUARD_RUN) $(LUXARCH_IMAGE) --plan` (GUARD_RUN also mounts a worktree's main `.git`).
-check: guard-version-check honest lint mypy test arch audit gitleaks ## THE fleet gate — every guard, in order
+# Every guard-backed target skips under an empty LUX_REGISTRY, so a gate over them would pass having
+# judged nothing.
+require-registry: ## Refuse to run the gate with no guard registry, where every leg would skip
+	@[ -n "$(LUX_REGISTRY)" ] || { echo "REFUSING: LUX_REGISTRY is unset, so every guard would skip and nothing would be judged: copy Makefile.local.example to Makefile.local" >&2; exit 1; }
+
+check: require-registry
+
+# luxarch:check-gate asset v3 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit check-gate`.
+# ── The fleet gate: every leg runs, then the gate fails naming each red leg ───────────────────────
+# Emitted by `luxarch --emit check-gate`; it replaces a hand-written `check:` line. A gate written as a
+# prerequisite list (`check: … lint mypy test arch …`) stops at the FIRST failing leg: one ruff finding
+# hid a 4,700-test suite, every hidden red cost one more fix-and-rerun cycle, and agents reached for
+# `make -k`, which keeps going but also throws away the fatal steps' fatality.
+#
+# `guard-version-check` and `honest` stay PREREQUISITES and stay fatal: they run first, and a stale
+# guard or a rule family that scanned nothing makes every later verdict meaningless. Every other leg
+# then runs in order. A leg that fails is recorded, never skipped, and the gate exits non-zero naming
+# each one. `repo.makefile_canonical` credits CHECK_LEGS only when this recipe is the asset's own, so
+# a hand-written loop that drops an exit code earns nothing.
+#
+# The recipe refuses, as make expands it, every way found for a caller to end the gate in a pass over
+# a red leg. An expansion `$(error)` stops make even under `make -i` (which throws away every exit
+# status, the gate's own included), and it is reached wherever `check` runs in this make, as a goal or
+# as a prerequisite. A parent recipe that runs `$(MAKE) check` under its own `-i` still discards it.
+#   - make's flags `-i` (errors ignored), `-t` (legs touched, not run) and `-e` (the environment
+#     overrides the makefile's tool settings), in any spelling: MAKEFLAGS, GNUMAKEFLAGS, `+=`;
+#   - `--eval`, `-I` (it can supply an included file such as Makefile.local) and MAKEFILES: each adds
+#     makefile text from outside to this make and every leg, so the caller would choose what the
+#     legs run, or which legs count;
+#   - CHECK_LEGS, MAKE, MAKE_COMMAND, SHELL or .SHELLFLAGS from the environment or the command line,
+#     and an empty CHECK_LEGS.
+# A variable given on the command line never reaches a leg: `check` empties MAKEOVERRIDES for its
+# sub-makes and unsets each such variable in the shell that starts them (make exports it there
+# too; never PATH or a name the shell owns, like PPID or OPTIND), so each leg runs with the makefile's
+# settings and `make release ALLOW_RETAG=1` still runs
+# the gate. It does reach `check`'s two prerequisites, which run in this make. MAKEFLAGS or
+# GNUMAKEFLAGS given as a command-line variable is refused, and MAKE and SHELL are checked as the
+# recipe runs: make's own MAKE, and a POSIX shell.
+# Under `make -n` the legs dry-run (each sub-make prints its commands) and the gate exits 1 with no
+# verdict: nothing ran, so nothing passed. Stated limits: a second makefile given with `-f` is part
+# of the makefile as far as make can tell, and a variable a leg runs that the makefile sets with `?=`
+# or never sets (an image, a tool, its arguments) takes a value from the environment; the gate can
+# tell neither from your own.
+# v3: the gate holds one of the machine's heavy-job slots (the guard-run block's `guard_slot`, v4) while
+# its legs run, so a full gate counts once against HEAVY_SLOTS and every scan and suite it starts runs
+# inside that slot instead of waiting for a second one. Its two prerequisites run before the recipe,
+# so each of their full scans takes a slot of its own for as long as it runs.
+
+# Setting: the legs, in order, set in the makefile. An app repo's are exactly these; a repo with more
+# legs (a guard's own parity suite) appends them. Removing one reds repo.makefile_canonical ----------
+CHECK_LEGS ?= lint mypy test arch audit gitleaks
+
+check: override MAKEOVERRIDES :=
+check: guard-version-check honest ## THE fleet gate: runs every leg, then fails naming each red one
+	@$(foreach v,MAKEFLAGS GNUMAKEFLAGS,$(if $(filter command,$(origin $(v))),$(error REFUSING: $(v) is given as a command-line variable, so every leg would inherit flags this gate never saw: pass make's flags as flags)))$(if $(filter-out default,$(origin MAKE_COMMAND)),$(error REFUSING: MAKE_COMMAND is set by the $(origin MAKE_COMMAND), so a leg would not be make))$(if $(filter-out override,$(origin MAKEOVERRIDES)),$(error REFUSING: check's own `override MAKEOVERRIDES :=` is missing or changed, so a command-line variable would reach the legs: re-emit the gate))$(if $(subst $$(MAKE_COMMAND),,$(value MAKE)),$(error REFUSING: MAKE is $(value MAKE), not make's own $$(MAKE_COMMAND), so a leg would not be make))$(if $(and $(filter 1,$(words $(SHELL))),$(filter /bin/sh /usr/bin/sh /bin/bash /usr/bin/bash /bin/dash /usr/bin/dash /bin/zsh /usr/bin/zsh,$(SHELL))),,$(error REFUSING: SHELL is $(SHELL), not a POSIX shell that returns each leg's status))$(if $(or $(findstring i,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring t,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring e,$(filter-out -%,$(firstword $(MAKEFLAGS))))),$(error REFUSING: make -i ignores every failure, -t touches the legs instead of running them, and -e lets the environment override the makefile's tools (flags: $(filter-out -%,$(firstword $(MAKEFLAGS)))), so a red leg could pass: run make check without them))$(if $(findstring n,$(filter-out -%,$(firstword $(MAKEFLAGS)))),,$(if $(filter -I% --include-dir%,$(MAKEFLAGS)),$(error REFUSING: -I lets an included file (Makefile.local) come from another directory, into every leg: run make check without it))$(if $(filter --eval=%,$(MAKEFLAGS)),$(error REFUSING: --eval adds makefile text from the command line to every leg: put it in the makefile))$(if $(strip $(MAKEFILES)),$(error REFUSING: MAKEFILES ($(MAKEFILES)) reads other makefiles into every leg: unset it))$(foreach v,CHECK_LEGS MAKE MAKE_COMMAND SHELL .SHELLFLAGS,$(if $(filter environment% command,$(origin $(v))),$(error REFUSING: $(v) comes from the $(origin $(v)), so the caller chose how the legs run: set it in the makefile))))$(if $(strip $(CHECK_LEGS)),,$(error REFUSING: CHECK_LEGS is empty, so no leg would run))$(foreach v,$(filter-out PATH PPID SHELLOPTS BASHOPTS OPTIND UID EUID BASH_VERSINFO,$(.VARIABLES)),$(if $(filter command,$(origin $(v))),case '$(subst ','\'',$(v))' in ([0-9]*|*[!A-Za-z0-9_]*) ;; (*) unset '$(subst ','\'',$(v))';; esac; )) \
+	$(if $(value guard_slot),,$(error REFUSING: the gate holds a heavy-job slot from the guard-run block (v4), which this makefile does not define: paste luxarch --emit guard-run above it))$(guard_slot); \
+	failed=; for leg in $(CHECK_LEGS); do \
+	  printf '\n── make %s\n' "$$leg"; \
+	  $(MAKE) --no-print-directory "$$leg" || failed="$$failed $$leg"; \
+	done; \
+	if [ -n "$$failed" ]; then printf '\n✗ make check FAILED:%s (every leg ran; each one is above)\n' "$$failed"; exit 1; fi; \
+	case '$(filter-out -%,$(firstword $(MAKEFLAGS)))' in *n*) printf '\nmake -n: the legs above were printed, not run, so make check gives no verdict\n'; exit 1;; esac; \
+	printf '\n✓ make check: every leg passed (%s)\n' '$(CHECK_LEGS)'
 
 # FLEET-ONBOARDING-STANDARD §5: proves the repo is ONBOARDED (all three guards wired and
-# honest, privacy wired, history clean). It never judges red/green: that is `check`.
+# honest, privacy wired, history clean). It never judges red/green: that is `check`, so a
+# luxaudit exit of 1 (findings) is fine here and anything above it means no verdict.
+# `$(MAKE)` sits on a line of its own: make EXECUTES any line naming it, even under `make -n`.
 onboard-check: ## Prove the repo is onboarded: all three guards on + honest + privacy wired (NOT green)
-	@set +e; $(SKIP_NO_REGISTRY); fail=0; \
+	@set +e; $(SKIP_NO_REGISTRY); fail=0; A=$$(mktemp); trap 'rm -f "$$A"' EXIT INT TERM; \
 	$(GUARD_RUN) $(LUXARCH_IMAGE)  --version      >/dev/null || { echo "luxarch not wired"; fail=1; }; \
 	$(GUARD_RUN) $(LUXARCH_IMAGE)  --assert-scans >/dev/null 2>&1 || { echo "luxarch: a rule family scanned NOTHING (hollow green)"; fail=1; }; \
 	$(GUARD_RUN) $(LUXLINT_IMAGE)  --preflight    >/dev/null || { echo "mypy tail NOT honest (luxlint --preflight)"; fail=1; }; \
-	$(GUARD_RUN) $(LUXAUDIT_IMAGE) 2>&1 | grep -q "scan could not run" && { echo "luxaudit can't scan — supply-chain blind"; fail=1; }; \
+	a=0; $(GUARD_RUN) $(LUXAUDIT_IMAGE) >"$$A" 2>&1 || a=$$?; \
+	grep -q "scan could not run" "$$A" && { echo "luxaudit can't scan — supply-chain blind"; fail=1; }; \
+	[ "$$a" -le 1 ] || { echo "luxaudit exited $$a without a verdict — supply-chain blind"; fail=1; }; \
 	$(GUARD_RUN) $(LUXLINT_IMAGE)  --version      >/dev/null || { echo "luxlint not wired"; fail=1; }; \
 	$(GUARD_RUN) $(LUXAUDIT_IMAGE) --version      >/dev/null || { echo "luxaudit not wired"; fail=1; }; \
 	[ -f hooks/pre-commit ] || { echo "secret git-hooks NOT wired (luxlint --emit-hooks | sh, commit hooks/)"; fail=1; }; \
 	[ "$$(git config core.hooksPath)" = hooks ] || { echo "core.hooksPath is not hooks/ — the secret hooks never fire"; fail=1; }; \
 	[ ! -d .github/workflows ] || { echo "public CI present — make check is the sole gate (remove .github/workflows)"; fail=1; }; \
 	! sed 's/#.*//' Makefile | grep -qE '^[[:space:]]+[^#]*\bruff[[:space:]]+format\b' || { echo "Makefile runs a bare 'ruff format' — use 'luxlint --format'"; fail=1; }; \
-	$(MAKE) -s gitleaks >/dev/null 2>&1 || { echo "gitleaks failed over FULL history (secrets or a non-fleet commit identity) — scrub before onboarding is complete"; fail=1; }; \
-	[ $$fail -eq 0 ] && echo "onboard-check: all three guards on + honest + privacy wired + history clean ✓" || { echo "onboard-check FAILED"; exit 1; }
+	[ $$fail -eq 0 ] || { echo "onboard-check FAILED"; exit 1; }
+	@[ -z "$(LUX_REGISTRY)" ] || $(MAKE) -s gitleaks >/dev/null 2>&1 || { echo "gitleaks failed over FULL history (secrets or a non-fleet commit identity) — scrub before onboarding is complete"; echo "onboard-check FAILED"; exit 1; }
+	@[ -z "$(LUX_REGISTRY)" ] || echo "onboard-check: all three guards on + honest + privacy wired + history clean ✓"
 
 ##@ Quality
 
@@ -298,7 +369,7 @@ audit: ## Dependency CVEs via luxaudit (pinned; mount-only; live advisory feed; 
 # Runs as the repo owner (like format/build), so the compiled file is never root-owned;
 # HOME=/tmp gives the user-level uv install and its cache somewhere writable.
 audit-lock: ## Recompile requirements/audit.txt from the pyproject ranges (audit-only; rerun when deps change or before trusting make audit)
-	docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOME=/tmp -v "$(CURDIR)":/repo -w /repo $(TAIL_IMAGE) \
+	docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOME=/tmp -v $(CHECKOUT):/repo -w /repo $(TAIL_IMAGE) \
 	  sh -c 'pip install -q --user --root-user-action=ignore uv >/dev/null \
 	         && mkdir -p requirements \
 	         && python -m uv pip compile --upgrade pyproject.toml -o requirements/audit.txt'
@@ -309,7 +380,7 @@ audit-lock: ## Recompile requirements/audit.txt from the pyproject ranges (audit
 # or `mdformat` — either one formats with a config the gate does not check.
 format: ## Apply every canonical formatter in place (luxlint --format) — writes to host
 	@$(SKIP_NO_REGISTRY); \
-	docker run --rm --user $(REPO_UID):$(REPO_GID) -v "$(CURDIR)":/repo $(LUXLINT_IMAGE) --format
+	docker run --rm --user $(REPO_UID):$(REPO_GID) -v $(CHECKOUT):/repo $(LUXLINT_IMAGE) --format
 
 # The canonical pytest config is emitted by luxlint and run in the tail image — a local
 # pytest config is a red (test.no_local_pytest_config).
@@ -337,18 +408,20 @@ format: ## Apply every canonical formatter in place (luxlint --format) — write
 #   tree cannot delete each other's config mid-run;
 # - the source is mounted read-only with PYTHONDONTWRITEBYTECODE, so nothing lands in it;
 # - `coverage report --precision=2`: a whole-percent report rounds 89.5% up to "90%" and
-#   passes a floor of 90.
+#   passes a floor of 90;
+# - a run alone holds one of the machine's heavy-job slots, and inside `check` shares the gate's;
+#   the suite's container is capped like every guard run (guard_slot, guard_caps).
 test: ## pytest against the INSTALLED package (canonical config), then the coverage ratchet
-	@set +e; $(SKIP_NO_REGISTRY); D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT INT TERM; \
+	@set +e; $(SKIP_NO_REGISTRY); $(guard_slot); D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT INT TERM; \
 	$(GUARD_RUN) $(LUXLINT_IMAGE) --emit-config pytest > "$$D/pytest.ini" || exit 2; \
-	docker run --rm -v "$(CURDIR)":/repo:ro -w /repo -v "$$D":/out -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) \
+	docker run --rm $(guard_caps) -v $(CHECKOUT):/repo:ro -w /repo -v "$$D":/out -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) \
 	  sh -c 'pip install -q --root-user-action=ignore pytest pytest-asyncio coverage >/dev/null \
 	         && pip install -q --root-user-action=ignore . >/dev/null \
 	         && export COVERAGE_CORE=sysmon COVERAGE_FILE=/out/.coverage \
 	         && python -m coverage run --branch --source=brother_ql -m pytest -c /out/pytest.ini --rootdir=/repo -p no:cacheprovider \
 	         && python -m coverage report --precision=2 > /out/coverage.txt'; rc=$$?; \
 	[ $$rc -eq 0 ] || exit $$rc; \
-	c=0; docker run --rm -i -v "$(CURDIR)":/repo $(LUXLINT_IMAGE) --coverage-ratchet < "$$D/coverage.txt" > "$$D/ratchet.txt" || c=$$?; \
+	c=0; docker run --rm -i -v $(CHECKOUT):/repo $(LUXLINT_IMAGE) --coverage-ratchet < "$$D/coverage.txt" > "$$D/ratchet.txt" || c=$$?; \
 	sed -n '/coverage ratchet/,$$p' "$$D/ratchet.txt"; exit $$c
 
 ##@ Secrets
@@ -654,7 +727,10 @@ RELEASE_VERSION := $(shell cat VERSION 2>/dev/null)
 # One shell per step, and `$(MAKE)` on lines of its own: make EXECUTES any line that
 # mentions $(MAKE) even under `make -n`, so a single-line recipe would really tag, push and
 # publish on a dry run (and luxarch, which judges the recipe by `make -n`, could not read it).
+# `-i` discards the gate's own refusal once it is a sub-make's, so release refuses it itself, on a
+# `+` line that `-t` runs too. An expansion $(error) stops make under `-i`.
 release: ## Tag, push, build and publish the GitHub Release for the VERSION file's version
+	+@$(if $(or $(findstring i,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring t,$(filter-out -%,$(firstword $(MAKEFLAGS))))),$(error REFUSING: make -i would publish past a red gate and -t would touch what it should run: run make release without them))$(REFUSE_OTHER_TREE)true
 	@set -e; \
 	[ -n "$(RELEASE_VERSION)" ] || { echo "release: VERSION is empty"; exit 1; }; \
 	[ -z "$$(git status --porcelain)" ] || { echo "release: working tree is dirty — commit first"; exit 1; }; \
@@ -674,7 +750,7 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 ##@ Build
 
 build: ## Build the sdist + wheel in Docker (hatchling; version from VERSION)
-	docker run --rm --user $(REPO_UID):$(REPO_GID) -v "$(CURDIR)":/repo -w /repo $(TAIL_IMAGE) \
+	docker run --rm --user $(REPO_UID):$(REPO_GID) -v $(CHECKOUT):/repo -w /repo $(TAIL_IMAGE) \
 	  sh -c 'pip install -q --root-user-action=ignore build >/dev/null && python -m build --outdir dist'
 
 ##@ Meta
@@ -686,7 +762,7 @@ build: ## Build the sdist + wheel in Docker (hatchling; version from VERSION)
 STAMP = python3 -c 'import json,sys,os; d=json.load(open(sys.argv[1])); d["commit"]=os.environ["SHA"]; d["generated_at"]=os.environ["TS"]; json.dump(d,open(sys.argv[2],"w"),indent=2)'
 
 status: ## Regenerate committed guard-status files (.lux*-status.json) — commit them
-	@$(SKIP_NO_REGISTRY); \
+	@$(REFUSE_OTHER_TREE)$(SKIP_NO_REGISTRY); \
 	set -e; C=$$(mktemp); trap 'rm -f "$$C"' EXIT INT TERM; \
 	export SHA=$$(git rev-parse HEAD) TS=$$(date -u +%FT%TZ); \
 	$(GUARD_RUN) $(LUXLINT_IMAGE)  --json > "$$C" || true; $(STAMP) "$$C" .luxlint-status.json; \
@@ -703,7 +779,9 @@ guard-version-check: ## FATAL: fail if any guard pin is behind the published :la
 	  set -- $$pair; g=$$1; pin=$$2; img=$(LUX_REGISTRY)/luxardolabs/$$g; \
 	  docker pull -q $$img:latest >/dev/null 2>&1 || true; \
 	  latest=$$(docker run --rm $$img:latest --version 2>/dev/null | awk '{print $$2}'); \
-	  if [ -n "$$latest" ] && [ "$$latest" != "$$pin" ]; then \
+	  if [ -z "$$latest" ]; then \
+	    printf '✗ %s: could not read %s:latest, so the pin %s was not judged\n' "$$g" "$$img" "$$pin"; rc=1; \
+	  elif [ "$$latest" != "$$pin" ]; then \
 	    printf '✗ %s pinned %s, latest %s — behind. Preview: --new-rules --since %s; then make guard-upgrade\n' "$$g" "$$pin" "$$latest" "$$pin"; rc=1; \
 	  fi; \
 	done; exit $$rc
@@ -750,4 +828,4 @@ help: ## Show this help
 	  /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 	@echo
 
-.PHONY: check onboard-check honest lint mypy arch audit audit-lock format test gitleaks gitleaks-staged release build status guard-version-check guard-upgrade help
+.PHONY: check require-registry onboard-check honest lint mypy arch audit audit-lock format test gitleaks gitleaks-staged gitleaks-commit-msg release build status guard-version-check guard-upgrade help
