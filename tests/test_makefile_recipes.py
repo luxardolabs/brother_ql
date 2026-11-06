@@ -1,7 +1,7 @@
 """The hand-written Makefile recipes keep the gate honest.
 
-The suite's image has no `make`, so these read the recipe text. They pin the shape of each
-recipe, not make's behaviour.
+The suite's image has no `make`, so these read the Makefile's text and pin each recipe's shape and
+each refusal's condition. A green run here says the text is in place, not that make behaves.
 
 Copyright (C) 2025 Luxardo Labs
 Licensed under GPL-3.0-or-later
@@ -29,54 +29,95 @@ def recipe(target):
     return logical
 
 
-def test_recipes_mount_the_checkout_quoted():
+def definition(name):
+    """The one line that defines a make variable."""
+    return next(
+        line for line in MAKEFILE.splitlines() if line.startswith(f"override {name} =")
+    )
+
+
+def test_recipes_mount_the_checkout_through_the_quoted_definition():
+    assert definition("CHECKOUT") == "override CHECKOUT = '$(subst ','\\'',$(CURDIR))'"
     for target in ("audit-lock", "format", "test", "build"):
         text = "\n".join(recipe(target))
         assert '"$(CURDIR)"' not in text, target
         assert "$(CHECKOUT):/repo" in text, target
 
 
-def test_the_suite_holds_a_heavy_job_slot_and_runs_capped():
-    text = "\n".join(recipe("test"))
-    assert "$(guard_slot)" in text
-    assert "docker run --rm $(guard_caps)" in text
+def test_the_suite_holds_its_slot_in_the_recipe_shell_and_runs_capped():
+    first = recipe("test")[0]
+    assert "$(SKIP_NO_REGISTRY); $(guard_slot); D=" in first
+    assert "docker run --rm $(guard_caps)" in first
 
 
-def test_the_gate_refuses_an_empty_registry():
-    assert "\ncheck: require-registry\n" in MAKEFILE
-    text = "\n".join(recipe("require-registry"))
-    assert '[ -n "$(LUX_REGISTRY)" ]' in text
-    assert "exit 1" in text
+def test_the_suite_names_a_kill_at_its_cap():
+    assert "exit 137" in "\n".join(recipe("test"))
 
 
-def test_release_refuses_ignored_errors_before_it_does_anything():
-    first = recipe("release")[0]
-    assert first.startswith("+@")
-    assert "$(error REFUSING: make -i" in first
+def test_the_gate_and_release_refuse_a_registry_their_legs_would_skip_on():
+    line = next(
+        line
+        for line in MAKEFILE.splitlines()
+        if line.startswith("$(if $(and $(filter check release,$(MAKECMDGOALS))")
+    )
+    assert "$(if $(strip $(LUX_REGISTRY)),,$(error REFUSING" in line
+    assert "$(if $(filter command,$(origin LUX_REGISTRY)),$(error REFUSING" in line
+    assert "$(if $(guard_dry),,1)" in line
 
 
-def test_status_and_release_refuse_another_tree():
+def test_the_refusal_macros_read_the_flags_that_would_discard_a_red():
+    text = definition("REFUSE_IGNORED")
+    for flag in ("i", "t", "e"):
+        assert (
+            f"$(findstring {flag},$(filter-out -%,$(firstword $(MAKEFLAGS))))" in text
+        )
+    assert "$(error REFUSING" in text
+
+
+def test_release_refuses_outside_makefile_text_and_a_chosen_make():
+    text = definition("REFUSE_OUTSIDE_TEXT")
+    assert "--eval=% -I% --include-dir%" in text
+    assert "$(strip $(MAKEFILES))" in text
+    assert "$(foreach v,MAKE MAKE_COMMAND SHELL .SHELLFLAGS," in text
+
+
+def test_release_runs_every_refusal_on_its_first_line():
+    assert (
+        recipe("release")[0]
+        == "+@$(REFUSE_IGNORED)$(REFUSE_OUTSIDE_TEXT)$(REFUSE_OTHER_TREE)true"
+    )
+
+
+def test_the_other_tree_refusal_cannot_be_overridden_and_spares_this_tree():
+    text = definition("REFUSE_OTHER_TREE")
+    assert "$(filter command,$(origin CURDIR))" in text
+    assert "$(call guard_same,$(CURDIR),$(GUARD_PWD))" in text
     assert "$(REFUSE_OTHER_TREE)" in recipe("status")[0]
-    assert "$(REFUSE_OTHER_TREE)" in recipe("release")[0]
 
 
-def test_onboard_check_runs_the_sub_make_on_a_line_of_its_own():
+def test_onboard_check_refuses_ignored_errors_and_runs_every_verdict():
     lines = recipe("onboard-check")
-    naming_make = [line for line in lines if "$(MAKE)" in line]
-    assert naming_make
-    assert not any("$(GUARD_RUN)" in line for line in naming_make)
+    assert lines[0] == "+@$(REFUSE_IGNORED)true"
+    assert "$(MAKE) --no-print-directory onboard-guards || fail=1;" in lines[1]
+    assert "$(MAKE) -s gitleaks >/dev/null 2>&1 || {" in lines[1]
+    assert "$(GUARD_RUN)" not in lines[1]
 
 
-def test_onboard_check_judges_the_audit_exit_status():
-    text = "\n".join(recipe("onboard-check"))
+def test_onboard_guards_judges_the_audit_exit_status_and_reports_it():
+    text = "\n".join(recipe("onboard-guards"))
     assert "|| a=$$?" in text
-    assert '[ "$$a" -le 1 ]' in text
+    branch = text[text.index('[ "$$a" -le 1 ] || {') :]
+    assert "fail=1;" in branch[: branch.index("}")]
+    assert text.rstrip().endswith("exit $$fail")
 
 
-def test_the_version_check_fails_when_latest_cannot_be_read():
+def test_the_version_check_fails_when_it_cannot_pull_or_read_latest():
     text = "\n".join(recipe("guard-version-check"))
-    assert 'if [ -z "$$latest" ]' in text
-    assert '[ -n "$$latest" ] &&' not in text
+    assert "docker pull -q $$img:latest >/dev/null 2>&1 || {" in text
+    assert "rc=1; continue; }" in text
+    assert "|| true" not in text
+    branch = text[text.index('if [ -z "$$latest" ]') :]
+    assert "rc=1" in branch[: branch.index("elif")]
 
 
 def test_the_commit_message_scan_is_phony():

@@ -229,25 +229,33 @@ REPO_GID := $(shell id -g)
 
 # A clean clone without registry access still has a working Makefile: each guard-backed
 # target run on its own skips with a message instead of failing on an unreachable pull.
-# A skip is not a pass, so `check` (and `release`, through it) refuses an empty registry.
+# `gitleaks` and `gitleaks-staged` do not skip: with no registry they fail on the image name.
+# A skip is not a pass, so `check` and `release` refuse an empty registry, as make reads this file:
+# a prerequisite could be skipped with `-o`. A registry given on the command line is refused too,
+# because the gate keeps command-line variables from its legs, which would then skip. Dry runs are
+# how the guards read this makefile, so they pass.
+$(if $(filter command environment%,$(origin MAKECMDGOALS)),$(error REFUSING: MAKECMDGOALS comes from the $(origin MAKECMDGOALS), so make cannot tell which goals are running: unset it))
+$(if $(and $(filter check release,$(MAKECMDGOALS)),$(if $(guard_dry),,1)),$(if $(strip $(LUX_REGISTRY)),,$(error REFUSING: LUX_REGISTRY is unset, so every guard would skip and nothing would be judged: copy Makefile.local.example to Makefile.local))$(if $(filter command,$(origin LUX_REGISTRY)),$(error REFUSING: LUX_REGISTRY on the command line never reaches the gate's legs, so they would skip: set it in Makefile.local)))
 SKIP_NO_REGISTRY = if [ -z "$(LUX_REGISTRY)" ]; then echo "$@: LUX_REGISTRY unset (see Makefile.local.example) — skipping"; exit 0; fi
 
 # This checkout as a bind-mount source, quoted so a directory name holding shell syntax stays a name.
-CHECKOUT = '$(subst ','\'',$(CURDIR))'
+override CHECKOUT = '$(subst ','\'',$(CURDIR))'
 
 # A CURDIR on the command line is how GUARD_RUN is told to judge another tree. `status` and `release`
 # act in this tree (stamp its commit, tag it), so they refuse one. Dry runs are how the guards read
 # this makefile, so they pass.
-REFUSE_OTHER_TREE = $(if $(and $(filter command,$(origin CURDIR)),$(if $(guard_dry),,1)),$(error REFUSING: CURDIR on the command line names another tree, so $@ would read it and act in this one: run make -C <that tree>))
+override REFUSE_OTHER_TREE = $(if $(and $(filter command,$(origin CURDIR)),$(if $(guard_dry),,1)),$(if $(call guard_same,$(CURDIR),$(GUARD_PWD)),,$(error REFUSING: CURDIR on the command line names another tree, so $@ would read it and act in this one: run make -C <that tree>)))
+
+# Refused as make expands a recipe's first line, a `+` line that `-t` runs too: an expansion $(error)
+# stops make under `-i`, and a recipe's own refusal in a sub-make is discarded by a parent's `-i`.
+override REFUSE_IGNORED = $(if $(or $(findstring i,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring t,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring e,$(filter-out -%,$(firstword $(MAKEFLAGS))))),$(error REFUSING: make -i ignores failures, -t touches what it should run and -e lets the environment override the makefile, so make $@ could report what never passed: run it without them))
+
+# The ways check-gate lists for a caller to change how a recipe runs, for the one recipe that
+# publishes. Stated limit, as check-gate states it: a second makefile given with `-f` is part of the
+# makefile as far as make can tell, and a variable set with `?=` takes a value from the environment.
+override REFUSE_OUTSIDE_TEXT = $(if $(guard_dry),,$(if $(filter --eval=% -I% --include-dir%,$(filter-out $(MAKEOVERRIDES),$(MAKEFLAGS))),$(error REFUSING: --eval or -I adds makefile text from outside, which could change what make $@ runs: run it without them))$(if $(strip $(MAKEFILES)),$(error REFUSING: MAKEFILES ($(MAKEFILES)) reads other makefiles first: unset it))$(foreach v,MAKE MAKE_COMMAND SHELL .SHELLFLAGS,$(if $(filter environment% command,$(origin $(v))),$(error REFUSING: $(v) comes from the $(origin $(v)), so the caller chose how make $@ runs: set it in the makefile))))
 
 ##@ Gates
-
-# Every guard-backed target skips under an empty LUX_REGISTRY, so a gate over them would pass having
-# judged nothing.
-require-registry: ## Refuse to run the gate with no guard registry, where every leg would skip
-	@[ -n "$(LUX_REGISTRY)" ] || { echo "REFUSING: LUX_REGISTRY is unset, so every guard would skip and nothing would be judged: copy Makefile.local.example to Makefile.local" >&2; exit 1; }
-
-check: require-registry
 
 # luxarch:check-gate asset v3 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit check-gate`.
 # ── The fleet gate: every leg runs, then the gate fails naming each red leg ───────────────────────
@@ -309,9 +317,18 @@ check: guard-version-check honest ## THE fleet gate: runs every leg, then fails 
 # FLEET-ONBOARDING-STANDARD §5: proves the repo is ONBOARDED (all three guards wired and
 # honest, privacy wired, history clean). It never judges red/green: that is `check`, so a
 # luxaudit exit of 1 (findings) is fine here and anything above it means no verdict.
-# `$(MAKE)` sits on a line of its own: make EXECUTES any line naming it, even under `make -n`.
+# make EXECUTES any line naming `$(MAKE)`, even under `make -n`, so the guards sit in a sub-make,
+# which dry-runs them, and a dry run prints no verdict.
 onboard-check: ## Prove the repo is onboarded: all three guards on + honest + privacy wired (NOT green)
-	@set +e; $(SKIP_NO_REGISTRY); fail=0; A=$$(mktemp); trap 'rm -f "$$A"' EXIT INT TERM; \
+	+@$(REFUSE_IGNORED)true
+	@$(SKIP_NO_REGISTRY); fail=0; \
+	$(MAKE) --no-print-directory onboard-guards || fail=1; \
+	$(MAKE) -s gitleaks >/dev/null 2>&1 || { echo "gitleaks failed over FULL history (secrets or a non-fleet commit identity) — scrub before onboarding is complete"; fail=1; }; \
+	case '$(filter-out -%,$(firstword $(MAKEFLAGS)))' in *n*) exit 0;; esac; \
+	[ $$fail -eq 0 ] && echo "onboard-check: all three guards on + honest + privacy wired + history clean ✓" || { echo "onboard-check FAILED"; exit 1; }
+
+onboard-guards:
+	@set +e; fail=0; A=$$(mktemp); trap 'rm -f "$$A"' EXIT INT TERM; \
 	$(GUARD_RUN) $(LUXARCH_IMAGE)  --version      >/dev/null || { echo "luxarch not wired"; fail=1; }; \
 	$(GUARD_RUN) $(LUXARCH_IMAGE)  --assert-scans >/dev/null 2>&1 || { echo "luxarch: a rule family scanned NOTHING (hollow green)"; fail=1; }; \
 	$(GUARD_RUN) $(LUXLINT_IMAGE)  --preflight    >/dev/null || { echo "mypy tail NOT honest (luxlint --preflight)"; fail=1; }; \
@@ -324,9 +341,7 @@ onboard-check: ## Prove the repo is onboarded: all three guards on + honest + pr
 	[ "$$(git config core.hooksPath)" = hooks ] || { echo "core.hooksPath is not hooks/ — the secret hooks never fire"; fail=1; }; \
 	[ ! -d .github/workflows ] || { echo "public CI present — make check is the sole gate (remove .github/workflows)"; fail=1; }; \
 	! sed 's/#.*//' Makefile | grep -qE '^[[:space:]]+[^#]*\bruff[[:space:]]+format\b' || { echo "Makefile runs a bare 'ruff format' — use 'luxlint --format'"; fail=1; }; \
-	[ $$fail -eq 0 ] || { echo "onboard-check FAILED"; exit 1; }
-	@[ -z "$(LUX_REGISTRY)" ] || $(MAKE) -s gitleaks >/dev/null 2>&1 || { echo "gitleaks failed over FULL history (secrets or a non-fleet commit identity) — scrub before onboarding is complete"; echo "onboard-check FAILED"; exit 1; }
-	@[ -z "$(LUX_REGISTRY)" ] || echo "onboard-check: all three guards on + honest + privacy wired + history clean ✓"
+	exit $$fail
 
 ##@ Quality
 
@@ -420,6 +435,7 @@ test: ## pytest against the INSTALLED package (canonical config), then the cover
 	         && export COVERAGE_CORE=sysmon COVERAGE_FILE=/out/.coverage \
 	         && python -m coverage run --branch --source=brother_ql -m pytest -c /out/pytest.ini --rootdir=/repo -p no:cacheprovider \
 	         && python -m coverage report --precision=2 > /out/coverage.txt'; rc=$$?; \
+	[ $$rc -ne 137 ] || echo "$@: the suite's container was killed (exit 137), most likely at its memory cap (HEAVY_MEMORY $(HEAVY_MEMORY)): raise HEAVY_MEMORY in Makefile.local, or lower HEAVY_SLOTS" >&2; \
 	[ $$rc -eq 0 ] || exit $$rc; \
 	c=0; docker run --rm -i -v $(CHECKOUT):/repo $(LUXLINT_IMAGE) --coverage-ratchet < "$$D/coverage.txt" > "$$D/ratchet.txt" || c=$$?; \
 	sed -n '/coverage ratchet/,$$p' "$$D/ratchet.txt"; exit $$c
@@ -726,11 +742,10 @@ RELEASE_VERSION := $(shell cat VERSION 2>/dev/null)
 
 # One shell per step, and `$(MAKE)` on lines of its own: make EXECUTES any line that
 # mentions $(MAKE) even under `make -n`, so a single-line recipe would really tag, push and
-# publish on a dry run (and luxarch, which judges the recipe by `make -n`, could not read it).
-# `-i` discards the gate's own refusal once it is a sub-make's, so release refuses it itself, on a
-# `+` line that `-t` runs too. An expansion $(error) stops make under `-i`.
+# publish on a dry run. Under `make -n` the gate exits 1 with no verdict, which ends the dry run
+# there, so it prints neither the tag nor the publish.
 release: ## Tag, push, build and publish the GitHub Release for the VERSION file's version
-	+@$(if $(or $(findstring i,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring t,$(filter-out -%,$(firstword $(MAKEFLAGS))))),$(error REFUSING: make -i would publish past a red gate and -t would touch what it should run: run make release without them))$(REFUSE_OTHER_TREE)true
+	+@$(REFUSE_IGNORED)$(REFUSE_OUTSIDE_TEXT)$(REFUSE_OTHER_TREE)true
 	@set -e; \
 	[ -n "$(RELEASE_VERSION)" ] || { echo "release: VERSION is empty"; exit 1; }; \
 	[ -z "$$(git status --porcelain)" ] || { echo "release: working tree is dirty — commit first"; exit 1; }; \
@@ -777,7 +792,7 @@ guard-version-check: ## FATAL: fail if any guard pin is behind the published :la
 	@$(SKIP_NO_REGISTRY); rc=0; \
 	for pair in "luxarch $(LUXARCH_VERSION)" "luxlint $(LUXLINT_VERSION)" "luxaudit $(LUXAUDIT_VERSION)"; do \
 	  set -- $$pair; g=$$1; pin=$$2; img=$(LUX_REGISTRY)/luxardolabs/$$g; \
-	  docker pull -q $$img:latest >/dev/null 2>&1 || true; \
+	  docker pull -q $$img:latest >/dev/null 2>&1 || { printf '✗ %s: could not pull %s:latest, so the pin %s was not judged\n' "$$g" "$$img" "$$pin"; rc=1; continue; }; \
 	  latest=$$(docker run --rm $$img:latest --version 2>/dev/null | awk '{print $$2}'); \
 	  if [ -z "$$latest" ]; then \
 	    printf '✗ %s: could not read %s:latest, so the pin %s was not judged\n' "$$g" "$$img" "$$pin"; rc=1; \
@@ -828,4 +843,4 @@ help: ## Show this help
 	  /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 	@echo
 
-.PHONY: check require-registry onboard-check honest lint mypy arch audit audit-lock format test gitleaks gitleaks-staged gitleaks-commit-msg release build status guard-version-check guard-upgrade help
+.PHONY: check onboard-check onboard-guards honest lint mypy arch audit audit-lock format test gitleaks gitleaks-staged gitleaks-commit-msg release build status guard-version-check guard-upgrade help

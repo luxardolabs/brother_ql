@@ -12,7 +12,7 @@ make check    # the full gate, in canonical order
 
 `check` runs `guard-version-check` and `honest` first, and either one failing stops it. It then runs every leg of `lint mypy test arch audit gitleaks`, even past a failure, and fails at the end naming each red leg.
 
-With `LUX_REGISTRY` unset, a guard-backed target run on its own skips with a message, while `make check` and `make release` refuse, because a gate of skips has judged nothing. Run the Makefile from its own directory or with `make -C <dir>`: `make -f <path>` from elsewhere is refused.
+The guards come from a private registry, so `make check` and `make release` need `LUX_REGISTRY` in `Makefile.local` and refuse without it, because a gate of skips has judged nothing. With it unset, `lint`, `mypy`, `test`, `arch`, `audit`, `format` and `status` run on their own skip with a message, and `gitleaks` fails on the image name. Run the Makefile from its own directory or with `make -C <dir>`: `make -f <path>` from elsewhere is refused.
 
 | Target               | What it does                                                       |
 | -------------------- | ------------------------------------------------------------------ |
@@ -39,7 +39,7 @@ make test
 
 The package is installed into a throwaway container first, so the suite exercises the artifact a user would get rather than the working tree. Running `pytest` directly will not work: the canonical config requires pytest-asyncio, and the tests import `brother_ql` as an installed package.
 
-The suite is 73 tests across 9 files, covering conversion, labels and models, raster generation, image processing, positioning, config-override precedence, the CLI, and end-to-end byte generation.
+The suite is 87 tests across 11 files, covering conversion, labels and models, raster generation, image processing, positioning, config-override precedence, the CLI, end-to-end byte generation, and the text of the Makefile's recipes. The suite's image has no `make`, so the Makefile tests read its text: they pin each recipe's shape and do not run it.
 
 The coverage floor is `[test].coverage_min = 90` in `.luxlint.toml`, set from a measured 90% branch coverage. `make test` enforces it: it runs the suite under branch coverage (`COVERAGE_CORE=sysmon`) against the installed package, then feeds `coverage report` to `luxlint --coverage-ratchet`. A failing test or coverage below the floor fails `make test`. Raise the floor when coverage rises, and never lower it.
 
@@ -71,6 +71,8 @@ tests/
 ├── test_image_processing.py    # Image tests
 ├── test_label_positioning.py   # Positioning tests
 ├── test_labels.py              # Label tests
+├── test_makefile_mounts.py     # Container mounts name the checkout
+├── test_makefile_recipes.py    # The gate recipes' shape
 ├── test_models.py              # Model tests
 ├── test_print_now.py           # End-to-end byte generation
 └── test_raster.py              # Raster tests
@@ -93,6 +95,6 @@ A release is a tag **plus** a release object: `make release` runs the gate, buil
 1. Fork the repository
 1. Create a feature branch
 1. Add tests for new functionality
-1. Run `make format`, then `make check` — both must be clean
+1. Run `make format`, then `make check` — both must be clean (they need the private guard registry; without access to it, say so in the pull request and a maintainer runs the gate)
 1. Update the docs your change touches, and bump the "last grounded" marker on each page you edit
 1. Submit a pull request
