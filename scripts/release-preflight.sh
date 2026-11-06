@@ -52,13 +52,15 @@ unknown=$(grep -vE '^[[:space:]]*(#.*)?$' Makefile.local | grep -vE '^(LUX_REGIS
 [ -z "$unknown" ] || refuse "Makefile.local may set only LUX_REGISTRY and HEAVY_*, to plain words, and holds: $unknown"
 
 # The repository: every read must succeed, since an empty answer from a git that died reads as clean.
-[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ] || refuse "this is not a working tree git can read"
+inside=$(git rev-parse --is-inside-work-tree 2>&1)
+[ "$inside" = true ] || refuse "this is not a working tree git can read: $inside"
 [ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$(pwd -P)" ] || refuse "git's working tree is not this directory: check core.worktree"
 [ "$(git symbolic-ref -q HEAD)" = refs/heads/main ] || refuse "releases come from main"
 replaced=$(git for-each-ref refs/replace 2>/dev/null) || refuse "cannot read refs/replace"
 [ -z "$replaced" ] || refuse "refs/replace is set, so git would read other commits than the ones it pushes"
-fetch_url=$(git remote get-url origin 2>/dev/null) || refuse "there is no origin"
-push_url=$(git remote get-url --push origin 2>/dev/null) || refuse "there is no push URL for origin"
+# --all, because git push goes to every URL a remote lists and plain get-url names only the first.
+fetch_url=$(git remote get-url --all origin 2>/dev/null) || refuse "there is no origin"
+push_url=$(git remote get-url --push --all origin 2>/dev/null) || refuse "there is no push URL for origin"
 [ "$fetch_url" = "$push_url" ] || refuse "origin pushes somewhere other than it fetches from"
 case "$fetch_url" in
 https://github.com/luxardolabs/brother_ql | https://github.com/luxardolabs/brother_ql.git) ;;
@@ -78,6 +80,10 @@ status=$(git -c core.fsmonitor=false status --porcelain --untracked-files=all 2>
 all_ignored=$(git ls-files -oi --exclude-standard 2>/dev/null) || refuse "cannot list ignored files"
 root_ignored=$(git ls-files -oi --exclude-from=.gitignore 2>/dev/null) || refuse "cannot list ignored files"
 [ "$all_ignored" = "$root_ignored" ] || refuse "some files are ignored by something other than the committed .gitignore (.git/info/exclude, core.excludesFile, or a nested .gitignore), so the gate reads files the commit does not hold: remove them, or commit the pattern"
+
+# Ignored files beside the code and its tests would let a suite pass on what a fresh clone lacks.
+beside=$(printf '%s\n' "$all_ignored" | grep -E '^(src|tests)/' | grep -v '__pycache__/' | head -n 1)
+[ -z "$beside" ] || refuse "$beside is ignored but sits beside the code, so the suite can read a file the commit does not hold: remove it, or commit it"
 
 # The bytes on disk are the bytes at HEAD. git status trusts its index and its config, which can both
 # hide a change, and the gate judges what is on disk.

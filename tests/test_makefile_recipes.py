@@ -44,6 +44,10 @@ def test_recipes_mount_the_checkout_through_the_quoted_definition():
         assert "$(CHECKOUT):/repo" in text, target
     assert recipe("build") == ["$(call BUILD_ARTIFACTS,$(CHECKOUT))"]
     assert "-v $(1):/repo" in definition("BUILD_ARTIFACTS")
+    # pip needs a home it can write as a user the image does not know.
+    assert "--user $(REPO_UID):$(REPO_GID) -e HOME=/tmp" in definition(
+        "BUILD_ARTIFACTS"
+    )
 
 
 def test_the_suite_holds_its_slot_in_the_recipe_shell_and_runs_capped():

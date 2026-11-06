@@ -22,7 +22,7 @@ case "$*" in
 "rev-parse --show-toplevel") pwd -P ;;
 "symbolic-ref -q HEAD") echo refs/heads/main ;;
 "for-each-ref refs/replace") ;;
-"remote get-url origin" | "remote get-url --push origin") echo https://github.com/luxardolabs/brother_ql.git ;;
+"remote get-url --all origin" | "remote get-url --push --all origin") echo https://github.com/luxardolabs/brother_ql.git ;;
 "config --get "*) ;;
 "ls-files -oi --exclude-standard" | "ls-files -oi --exclude-from=.gitignore") ;;
 "-c core.fsmonitor=false status --porcelain --untracked-files=all") ;;
@@ -82,9 +82,9 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
         ('"symbolic-ref -q HEAD") echo heads/main ;;', "main"),
         ('"for-each-ref refs/replace") exit 128 ;;', "refs/replace"),
         ('"for-each-ref refs/replace") echo some-ref ;;', "refs/replace"),
-        ('"remote get-url origin") exit 2 ;;', "origin"),
+        ('"remote get-url --all origin") exit 2 ;;', "origin"),
         (
-            '"remote get-url --push origin") echo /sink.git ;;',
+            '"remote get-url --push --all origin") echo /sink.git ;;',
             "pushes",
         ),
         # A git that dies prints nothing, which must not read as a clean tree.
@@ -122,8 +122,32 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
             "rename it",
         ),
         (
-            '"remote get-url origin" | "remote get-url --push origin") echo /fork.git ;;',
+            '"remote get-url --all origin" | "remote get-url --push --all origin") echo /fork.git ;;',
             "origin is",
+        ),
+        # git push goes to every URL listed, so one real URL and a second must not pass.
+        (
+            '"remote get-url --push --all origin") '
+            "printf 'https://github.com/luxardolabs/brother_ql.git\\n/sink.git\\n' ;;",
+            "pushes",
+        ),
+        (
+            '"remote get-url --all origin" | "remote get-url --push --all origin") '
+            "printf 'https://github.com/luxardolabs/brother_ql.git\\n/sink.git\\n' ;;",
+            "origin is",
+        ),
+        # git's own reason, such as dubious ownership, reaches the person.
+        (
+            '"rev-parse --is-inside-work-tree") echo "fatal: detected dubious ownership" >&2; exit 128 ;;',
+            "dubious ownership",
+        ),
+        (
+            '"ls-files -oi --exclude-standard" | "ls-files -oi --exclude-from=.gitignore") echo tests/lib/helper.py ;;',
+            "beside the code",
+        ),
+        (
+            '"ls-files -oi --exclude-standard" | "ls-files -oi --exclude-from=.gitignore") echo src/brother_ql/_local.py ;;',
+            "beside the code",
         ),
         ('"config --get core.sshCommand") echo evil ;;', "core.sshCommand"),
         ('"config --get remote.origin.receivepack") echo evil ;;', "receivepack"),
@@ -162,6 +186,14 @@ def test_makefile_local_may_hold_plain_settings_only(tmp_path, local):
     word, said = preflight(tmp_path, ["make", "release"], local=local)
     assert word == "refused"
     assert "Makefile.local" in said
+
+
+def test_caches_the_committed_gitignore_names_pass(tmp_path):
+    arm = (
+        '"ls-files -oi --exclude-standard" | "ls-files -oi --exclude-from=.gitignore") '
+        "printf 'tests/__pycache__/a.pyc\\nsrc/brother_ql/__pycache__/b.pyc\\n.coverage\\n' ;;\n"
+    )
+    assert preflight(tmp_path, ["make", "release"], git_answers=arm)[0] == "ok"
 
 
 @pytest.mark.parametrize(
@@ -298,7 +330,8 @@ def export(tmp_path, listing, blobs):
     tools = tmp_path / "tools"
     tools.mkdir()
     arms = "".join(
-        f'"cat-file blob {k}") printf %s {shlex.quote(v)} ;;\n' for k, v in blobs.items()
+        f'"cat-file blob {k}") printf %s {shlex.quote(v)} ;;\n'
+        for k, v in blobs.items()
     )
     (tools / "git").write_text(
         '#!/bin/sh\ncase "$*" in\n'

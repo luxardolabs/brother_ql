@@ -778,7 +778,7 @@ RELEASE_HEAD := $(shell git rev-parse HEAD 2>/dev/null)
 RELEASE_REPO := luxardolabs/brother_ql
 
 # Builds the sdist and wheel of the tree mounted from $(1), a quoted path.
-override BUILD_ARTIFACTS = docker run --rm --user $(REPO_UID):$(REPO_GID) -v $(1):/repo -w /repo $(TAIL_IMAGE) sh -c 'pip install -q --root-user-action=ignore build >/dev/null && python -m build --outdir dist'
+override BUILD_ARTIFACTS = docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOME=/tmp -v $(1):/repo -w /repo $(TAIL_IMAGE) sh -c 'pip install -q --root-user-action=ignore build >/dev/null && python -m build --outdir dist'
 
 # One shell per step, and `$(MAKE)` on lines of its own: make EXECUTES any line that
 # mentions $(MAKE) even under `make -n`, so a single-line recipe would really tag, push and
@@ -813,14 +813,14 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 	[ "$$(git rev-parse HEAD)" = "$(RELEASE_HEAD)" ] || { echo "release: HEAD moved during the gate, so that commit was not judged: run it again"; exit 1; }; \
 	[ "$$(/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-preflight.sh /proc/$$PPID)" = ok ] || { echo "release: the tree or its settings changed during the gate: run it again"; exit 1; }; \
 	git show $(RELEASE_HEAD):CHANGELOG.md | awk -v h='## $(RELEASE_VERSION) ' 'index($$0, h) == 1 { f = 1; next } /^## / { f = 0 } f' > "$$N"; \
-	FINISH="gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title $(RELEASE_VERSION) --notes-file $$N dist/*"; \
+	FINISH="gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title $(RELEASE_VERSION) --notes-file '$$N' dist/*"; \
 	trap - EXIT; trap 'echo "release: interrupted after tagging. Check with: git ls-remote --tags origin. If v$(RELEASE_VERSION) arrived, finish with: $$FINISH. If not: git tag -d v$(RELEASE_VERSION)"; exit 130' INT TERM; \
 	git tag -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD) || { rm -f "$$N"; exit 1; }; \
 	git -c push.followTags=false push --atomic origin $(RELEASE_HEAD):refs/heads/main v$(RELEASE_VERSION) || { \
 	  if ! R=$$(git ls-remote --tags origin refs/tags/v$(RELEASE_VERSION) 'refs/tags/v$(RELEASE_VERSION)^{}'); then echo "release: the push failed and origin cannot be read, so whether v$(RELEASE_VERSION) arrived is unknown. The local tag is kept. Check with: git ls-remote --tags origin. If it arrived, finish with: $$FINISH. If not: git tag -d v$(RELEASE_VERSION)"; exit 1; fi; \
 	  if [ -z "$$R" ]; then git tag -d v$(RELEASE_VERSION); rm -f "$$N"; echo "release: the push failed and v$(RELEASE_VERSION) is not on origin, so nothing was published and the local tag was removed"; exit 1; fi; \
 	  P=$$(printf '%s\n' "$$R" | tail -n 1 | cut -f1); \
-	  if [ "$$P" = "$(RELEASE_HEAD)" ]; then echo "release: the push reported a failure, but v$(RELEASE_VERSION) is on origin with no Release. Finish with: $$FINISH"; else echo "release: v$(RELEASE_VERSION) on origin names $$P, not the judged $(RELEASE_HEAD), so someone else tagged it. Nothing of this run was published on that tag. The local tag is kept: compare them, then: git tag -d v$(RELEASE_VERSION)"; fi; \
+	  if [ "$$P" = "$(RELEASE_HEAD)" ]; then echo "release: the push reported a failure, but v$(RELEASE_VERSION) is on origin at the judged commit, and this run made no Release. Unless someone else has, finish with: $$FINISH"; else echo "release: v$(RELEASE_VERSION) on origin names $$P, not the judged $(RELEASE_HEAD), so someone else tagged it. Nothing of this run was published on that tag. The local tag is kept: compare them, then: git tag -d v$(RELEASE_VERSION)"; fi; \
 	  exit 1; }; \
 	gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title "$(RELEASE_VERSION)" --notes-file "$$N" dist/* || { echo "release: v$(RELEASE_VERSION) is pushed but has no Release. Finish with: $$FINISH"; exit 1; }; \
 	rm -f "$$N"; \
