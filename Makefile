@@ -44,9 +44,9 @@ LUX_REGISTRY ?=
 # trails the published :latest (it is the first step of `make check`), and
 # `make guard-upgrade` bumps every pin and prints what newly bites. Keep the `:=` form —
 # guard-upgrade's sed rewrites exactly these three lines.
-LUXARCH_VERSION  := 0.327.0
-LUXLINT_VERSION  := 0.70.0
-LUXAUDIT_VERSION := 0.15.0
+LUXARCH_VERSION  := 0.344.0
+LUXLINT_VERSION  := 0.74.0
+LUXAUDIT_VERSION := 0.16.0
 
 LUXARCH_IMAGE  ?= $(LUX_REGISTRY)/luxardolabs/luxarch:$(LUXARCH_VERSION)
 LUXLINT_IMAGE  ?= $(LUX_REGISTRY)/luxardolabs/luxlint:$(LUXLINT_VERSION)
@@ -56,7 +56,7 @@ LUXAUDIT_IMAGE ?= $(LUX_REGISTRY)/luxardolabs/luxaudit:$(LUXAUDIT_VERSION)
 REGISTRY = $(LUX_REGISTRY)
 LUXLINT  = $(LUXLINT_IMAGE)
 
-# luxarch:guard-run asset v1 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit guard-run`.
+# luxarch:guard-run asset v7 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit guard-run`.
 # ── GUARD_RUN: how every guard sees this checkout ───────────────────────────────────────────────────
 # Emitted by `luxarch --emit guard-run`; paste it above the targets that run the guards (`status:`, and
 # `arch:` / `lint:` / `audit:` where they run a guard image).
@@ -70,8 +70,154 @@ LUXLINT  = $(LUXLINT_IMAGE)
 # there is nothing more to mount. Not covered: a worktree whose `.git` names its gitdir by a RELATIVE
 # path (`worktree.useRelativePaths`), which resolves from /repo to somewhere else; its git-reading
 # rules stay INERT. Claude Code writes absolute pointers.
-GUARD_MAIN := $(shell d=$$(git -C "$(CURDIR)" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [ "$$(basename "$$d")" = .git ] && dirname "$$d")
-GUARD_RUN = docker run --rm -v "$(CURDIR)":/repo $(if $(filter-out $(CURDIR),$(GUARD_MAIN)),-v "$(GUARD_MAIN)":"$(GUARD_MAIN)":ro)
+# The main checkout is mounted only from a linked worktree: git's own directory differs from the
+# common one. A plain subdirectory of a checkout is not a worktree and gets no second mount. A
+# worktree of a submodule or of a bare repository has a common directory not named `.git`: that
+# directory itself is mounted. A git hook's GIT_DIR is not this checkout's, so it is ignored here.
+override GUARD_MAIN := $(if $(filter command,$(origin GUARD_MAIN)),$(GUARD_MAIN),$(shell unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; cd -P -- '$(subst ','\'',$(CURDIR))' 2>/dev/null && g=$$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) && d=$$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [ "$$g" != "$$d" ] && if [ "$$(basename "$$d")" = .git ]; then dirname "$$d"; else printf '%s\n' "$$d"; fi))
+#
+# Every emitted block mounts `$(CURDIR)` as this checkout, and a relative `-include Makefile.local`
+# is read from it. Under `make -f <path>` started in another directory, `$(CURDIR)` is that other
+# directory: the guards would judge the wrong tree, and Makefile.local would not be read. So a run
+# whose first makefile is not in the directory make runs in is refused; `make -C <dir>` is the way to
+# run it from elsewhere. The makefile is found by joining MAKEFILE_LIST's words until they name a
+# file (a path may hold spaces), and its directory is compared, as a whole string, with the shell's
+# real one and with CURDIR; the longest joining that names a file wins, so a stray file named like
+# the path's first word does not. MAKEFILES (makefiles read first) is refused. A CURDIR given on the
+# top make's command line names the tree deliberately and is honoured; a sub-make, which inherits
+# it, is judged like any run, except under `make -n`, which runs no guard. v3: the dry runs luxarch and
+# luxlint read a makefile with (`make -n`, in a copy of the tree, CURDIR naming the real one, each
+# sub-make at its own MAKELEVEL) were refused at the first sub-make, so a correctly wired repo read
+# red. The block's own variables are set with `override` and never
+# exported, so neither `make -e` nor a parent's bare `export` can hand a sub-make other values.
+# Stated limits, each refused rather than misread: a `-f` path holding two spaces in a row or a tab
+# (MAKEFILE_LIST collapses them: run `make -C`), and a checkout path holding `:` (docker reads it
+# as a mount option). Not refused: under `make -n`, a guard line that make runs anyway (a `+` line,
+# or one naming `$(MAKE)`) in a sub-make that inherited a command-line CURDIR.
+override guard_same = $(and $(findstring |$(1)|,|$(2)|),$(findstring |$(2)|,|$(1)|))
+override guard_dry := $(findstring n,$(filter-out -% %=%,$(firstword $(MAKEFLAGS))))
+$(if $(strip $(MAKEFILES)),$(error REFUSING: MAKEFILES ($(MAKEFILES)) reads other makefiles first, so the guards' tree is not this makefile's: unset it))
+unexport CURDIR GUARD_MAIN GUARD_HERE GUARD_PWD GUARD_RUN guard_same guard_dry
+override GUARD_HERE := $(shell set -- $(foreach w,$(MAKEFILE_LIST),'$(subst ','\'',$(w))'); p=; for w do p="$${p:+$$p }$$w"; if [ -f "$$p" ]; then h=$$(cd -P -- "$$(dirname -- "$$p")" && pwd -P); fi; done; printf '%s\n' "$$h")
+override GUARD_PWD := $(shell pwd -P)
+$(if $(and $(filter command,$(origin CURDIR)),$(or $(filter 0,$(MAKELEVEL)),$(guard_dry))),,$(if $(and $(GUARD_HERE),$(call guard_same,$(GUARD_HERE),$(GUARD_PWD)),$(call guard_same,$(GUARD_HERE),$(CURDIR))),,$(if $(filter environment%,$(origin GUARD_MAIN)),$(error REFUSING: GUARD_MAIN comes from the environment, so the caller chose a tree to mount: unset it))$(error REFUSING: make runs in $(GUARD_PWD) (CURDIR $(CURDIR)), not in this makefile's directory $(or $(GUARD_HERE),(not found)), so every guard would read the wrong tree: run make -C <the makefile's directory>)))
+override GUARD_RUN = guard_slot_run() ( $(guard_slot_body) $(guard_capped) ); guard_slot_run $(guard_slot_vals) docker run --rm $(guard_caps) -v '$(subst ','\'',$(CURDIR))':/repo $(if $(GUARD_MAIN),$(if $(call guard_same,$(CURDIR),$(GUARD_MAIN)),,-v '$(subst ','\'',$(GUARD_MAIN))':'$(subst ','\'',$(GUARD_MAIN))':ro))
+#
+# ── Heavy-job slots (v5): at most HEAVY_SLOTS heavy jobs run on this machine at once ─────────────────
+# A full guard scan, the full gate (`make check`) and the full test suite each hold one slot for as long
+# as they run, counted across every checkout, session and user on the machine; the next one waits. Ten
+# parallel full scans once held 40 GiB on one host, and its timing tests failed at load 60. A slot is a
+# flock(2) lock on `<HEAVY_SLOT_DIR>/slot.<n>`, held on file descriptor 9 by the job's own processes:
+# GUARD_RUN runs the guard's `docker run` through a shell function (`guard_slot_run`, a subshell that
+# takes the slot and execs the client with it open), and the gate's and the suite's recipe shell
+# opens it, so every command they start inherits it. The kernel releases it when the last of them
+# exits, on a normal exit, Ctrl-C or kill -9 alike: there is no cleanup step and nothing goes stale.
+# It is taken with flock(1), or where there is none (macOS) with python3's fcntl.flock on the same
+# descriptor; with neither, the job is refused, naming both.
+# The slot code runs in the recipe's own shell and holds under `set -e` there, as the fleet's
+# recipes run: a held slot, a slot file another job made first or an ancestor that exits mid-walk
+# moves the job on, never ends it.
+#   - WAITING polls each second and, once it has waited a second, prints one line on stderr naming
+#     the jobs that hold the slots (each holder writes `slot.<n>.who` as it takes one, a job nested
+#     through an ancestor as its own lock is granted). A job never fails for want of a slot, and
+#     never runs without one.
+#   - TARGETED runs take none: a GUARD_RUN naming `--rule <id>` (a value holding more than blanks
+#     and commas, which luxarch drops, so `--rule ' '` runs every rule), or a flag that scans nothing
+#     (`--emit*`, `--doc`, `--docs`, `--playbook`, `--version`, `--list-rules`, `--changelog`,
+#     `--new-rules`, `--coverage-ratchet`, `--help`), and `make test-fast PYTEST_ARGS=<…>`. Every
+#     other guard run is a full scan and takes one: `--path <file>` alone too, which narrows only
+#     what is shown while every rule still reads the whole repo.
+#   - NESTED heavy jobs take no second slot: a job whose descriptor 9 is open on one of slots
+#     1..HEAVY_SLOTS and holds its lock runs inside the job that took it (`check` running `test`
+#     running a scan), so it starts at once, at HEAVY_SLOTS=1 too. So does a job one of whose
+#     ancestor processes has descriptor 9 open on such a slot while it is locked (read from /proc),
+#     which finds the holder through a process that closed the descriptors it inherited (Python's
+#     subprocess does by default). That job opens the slot on
+#     descriptor 9 itself and waits in the background to take the lock, so it keeps the slot
+#     after its ancestor exits, for as long as it runs. No variable can claim either: the descriptor and the lock are the
+#     proof.
+#   - HEAVY_SLOTS and HEAVY_SLOT_DIR are machine settings: set them in Makefile.local (`HEAVY_SLOTS :=
+#     2`, a whole number from 1 to 9999). From the environment, the command line or `--eval` they
+#     are refused, as check refuses CHECK_LEGS: a value set in passing would let one caller choose
+#     how many heavy jobs the whole machine runs. So is `-I <dir>` (outside `make -n`), from which
+#     make reads a Makefile.local this checkout lacks.
+#   - THE DIRECTORY is `/var/tmp/fleet-heavy-slots`, not under TMPDIR: TMPDIR is per user on macOS and
+#     per session in some agent harnesses, which would give each its own slots. `/var/tmp` exists,
+#     sticky and writable by every user, on Linux and macOS, and it is not where per-run scratch
+#     goes (`repo.makefile_no_fixed_tmp` reds a fixed `/tmp` path: the slots are shared on purpose).
+#     The directory is made 1777 (sticky and world-writable, as /tmp is) so every user can add a slot
+#     file, and each slot file 644 so every user can open it read-only, which is all a lock needs: two
+#     users on one machine share one cap. A slot directory or file that is a symlink, not a plain
+#     file, or unreadable is refused, naming it.
+# Stated limits: the cap counts slots 1..HEAVY_SLOTS of each caller, so a caller with a larger setting
+# (or a second makefile given with `-f` that sets one) uses more slots than one with a smaller; a
+# process a job starts that outlives it (a backgrounded daemon) keeps the descriptor, and so the slot,
+# until it exits; where there is no /proc (macOS) a job started through a process that closed its
+# descriptors is not seen as nested and waits for a slot of its own; and an ancestor shell that opens
+# a held slot file on descriptor 9 by hand makes its children read as nested in that slot. Found by
+# attack round 3 and not closed: a `--rule` substring that matches many rules (`--rule .`) is taken as
+# targeted; a job nested through an ancestor runs unlocked from the moment it finds the ancestor's
+# lock until its own background request reaches the kernel, so an ancestor that exits in that window
+# (milliseconds; not hit unloaded in 50 tries) lets a new job share its slot; a slot file removed
+# while held (`rm`; systemd-tmpfiles skips locked files) is made anew, and its next holder runs beside
+# the old one; the ancestor walk cannot read another user's /proc entries, so a job started as
+# another user through a process that closed its descriptors waits for a slot of its own (at
+# HEAVY_SLOTS=1, on its own ancestor); a user who creates a slot file others cannot read makes their
+# jobs refuse; a `slot.<n>.who` left by another user cannot be replaced, so waiters may name an
+# earlier job; and a command that unlocks its inherited descriptor 9 (`flock -u 9`) frees its job's
+# slot.
+HEAVY_SLOTS ?= 3
+HEAVY_SLOT_DIR ?= /var/tmp/fleet-heavy-slots
+# ── Heavy-job caps: how much of the machine one guard or test container may take ────────────────────
+# Every guard run (and the test block's suite) runs with `--memory=HEAVY_MEMORY` (swap included, so it
+# cannot spill). Without it one run that grows (a full scan of a large repo reached 5-7 GB) shares the
+# Docker VM's memory with the app and its database, and when the VM runs out the kernel's OOM killer
+# picks whichever it likes: on one Mac it took the app and Postgres. Capped, a run that hits its own
+# limit is the one killed, exit 137, and it says so. Machine configuration, like HEAVY_SLOTS, set in
+# Makefile.local; unset, it is two thirds of the Docker VM's memory shared among HEAVY_SLOTS (`docker
+# info`; 6 GiB on a 27 GiB Docker Desktop VM), or 6g where docker cannot say. HEAVY_CPUS, when set,
+# adds `--cpus`; unset there is no CPU cap (a suite that sizes its workers from the host's cores, as
+# pytest-xdist's `-n auto` does, would run them all inside the quota).
+# Each also runs at `--oom-score-adj=500`, so when the VM runs out anyway the kernel kills a guard
+# or test container before the app and its database, which compose ranks at -500
+# (`repo.compose_oom_ranked`).
+# (recursive, so `docker info` runs only when a capped run expands it, never on every parse)
+HEAVY_MEMORY ?= $(or $(shell docker info --format '{{.MemTotal}}' 2>/dev/null | awk -v n='$(HEAVY_SLOTS)' '$$1 ~ /^[0-9]+$$/ { n += 0; if (n < 1) n = 3; m = int($$1 * 2 / 3 / n / 1048576); if (m < 1024) m = 1024; print m "m"; exit }'),6g)
+HEAVY_CPUS ?=
+unexport HEAVY_SLOTS HEAVY_SLOT_DIR HEAVY_MEMORY HEAVY_CPUS guard_slot guard_slot_vals guard_slot_body guard_caps guard_capped
+override guard_caps = $(foreach v,HEAVY_MEMORY HEAVY_CPUS,$(if $(filter environment% command,$(origin $(v))),$(error REFUSING: $(v) comes from the $(origin $(v)), so the caller chose how much of this machine one heavy job may take: set it in Makefile.local)))--oom-score-adj=500 --memory='$(subst ','\'',$(HEAVY_MEMORY))' --memory-swap='$(subst ','\'',$(HEAVY_MEMORY))'$(if $(HEAVY_CPUS), --cpus='$(subst ','\'',$(HEAVY_CPUS))')
+# the run, then its exit: 137 is a SIGKILL, which for a capped container is almost always its own limit
+override guard_capped = gs_rc=0; "$$@" || gs_rc=$$?; [ "$$gs_rc" != 137 ] || echo "$$gs_job: the container was killed (exit 137), most likely at its memory cap (HEAVY_MEMORY $(HEAVY_MEMORY)): raise HEAVY_MEMORY in Makefile.local, or lower HEAVY_SLOTS so the machine has room" >&2; exit "$$gs_rc"
+override guard_slot_vals = $(foreach v,HEAVY_SLOTS HEAVY_SLOT_DIR,$(if $(filter environment% command,$(origin $(v))),$(error REFUSING: $(v) comes from the $(origin $(v)), so the caller chose how many heavy jobs this machine runs at once: set it in Makefile.local)))$(if $(filter --eval=%,$(MAKEFLAGS)),$(error REFUSING: --eval adds makefile text from the command line, which could choose the heavy-job slots: put it in Makefile.local))$(if $(guard_dry),,$(if $(filter -I% --include-dir%,$(filter-out $(MAKEOVERRIDES),$(MAKEFLAGS))),$(error REFUSING: -I lets make read a Makefile.local from another directory, which could choose the heavy-job slots: run without it)))'$(subst ','\'',$(HEAVY_SLOT_DIR))' '$(subst ','\'',$(HEAVY_SLOTS))' '$(subst ','\'',make $@ in $(CURDIR))'
+override guard_slot = $(if $(guard_dry),:,set -- $(guard_slot_vals); $(guard_slot_body) :)
+override guard_slot_body = gs_d=$$1 gs_n=$$2 gs_job=$$3; shift 3; \
+  case "$$gs_n" in (""|0*|*[!0-9]*|?????*) echo "REFUSING: HEAVY_SLOTS is \"$$gs_n\", not a whole number from 1 to 9999: set it in Makefile.local" >&2; exit 2;; esac; \
+  gs_x=; gs_p=; for gs_a in "$$@"; do case "$$gs_p" in (--rule) case "$$gs_a" in (*[![:space:],]*) gs_x=1;; esac;; esac; \
+    case "$$gs_a" in (--rule=*[![:space:],]*|--emit|--emit=?*|--emit-*|--doc|--doc=?*|--docs|--playbook|--playbook=?*|--version|--list-rules|--changelog|--new-rules|--coverage-ratchet|--help) gs_x=1;; esac; gs_p=$$gs_a; done; \
+  gs_who() { gs_t=$$(mktemp "$$gs_d/.who.XXXXXX") && { printf "%s\n" "$$gs_job (shell pid $$$$, user $$(id -un 2>/dev/null))" > "$$gs_t"; chmod 644 "$$gs_t"; mv -f "$$gs_t" "$$gs_f.who" 2>/dev/null || rm -f "$$gs_t"; }; }; \
+  gs_lock() { if command -v flock >/dev/null 2>&1; then flock -n -E 75 9; else python3 -I -c "import fcntl,os,sys; sys.excepthook=lambda t,v,b: os._exit(75 if t is BlockingIOError else 2); fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)"; fi; }; \
+  gs_have=; if [ -z "$$gs_x" ]; then gs_i=1; while [ "$$gs_i" -le "$$gs_n" ]; do gs_f=$$gs_d/slot.$$gs_i; \
+      if [ /dev/fd/9 -ef "$$gs_f" ] && gs_lock; then gs_have=1; break; fi; gs_i=$$((gs_i + 1)); done; \
+    gs_a=$$PPID; while [ -z "$$gs_have" ] && [ "$$gs_a" -gt 1 ] 2>/dev/null && [ -d "/proc/$$gs_a/fd" ]; do gs_i=1; \
+      while [ "$$gs_i" -le "$$gs_n" ]; do gs_f=$$gs_d/slot.$$gs_i; \
+        if [ "/proc/$$gs_a/fd/9" -ef "$$gs_f" ] && { ( exec 9<"$$gs_f"; gs_lock ); [ $$? = 75 ]; }; then gs_have=1; gs_anc=1; break; fi; gs_i=$$((gs_i + 1)); done; \
+      gs_a=$$(sed -e "s/.*) . //" -e "s/ .*//" "/proc/$$gs_a/stat" 2>/dev/null) || gs_a=; done; \
+    if [ -n "$${gs_anc:-}" ]; then exec 9<"$$gs_f"; ( if command -v flock >/dev/null 2>&1; then flock 9; else python3 -I -c "import fcntl; fcntl.flock(9, fcntl.LOCK_EX)"; fi && gs_who ) >/dev/null 2>&1 & fi; fi; \
+  if [ -z "$$gs_x$$gs_have" ]; then \
+    if [ -L "$$gs_d" ] || { [ ! -d "$$gs_d" ] && ! mkdir -m 1777 "$$gs_d" 2>/dev/null && [ ! -d "$$gs_d" ]; }; then \
+      echo "REFUSING: the heavy-job slot directory $$gs_d (HEAVY_SLOT_DIR) is not a directory this job can use" >&2; exit 2; fi; \
+    gs_w=; gs_r=75; while :; do gs_i=1; \
+      while [ "$$gs_i" -le "$$gs_n" ]; do gs_f=$$gs_d/slot.$$gs_i; \
+        if [ ! -e "$$gs_f" ] && [ ! -L "$$gs_f" ]; then gs_t=$$(mktemp "$$gs_d/.slot.XXXXXX") && { chmod 644 "$$gs_t"; ln "$$gs_t" "$$gs_f" 2>/dev/null || :; rm -f "$$gs_t"; }; fi; \
+        if [ -L "$$gs_f" ] || [ ! -f "$$gs_f" ] || [ ! -r "$$gs_f" ]; then \
+          echo "REFUSING: $$gs_f is not a plain file this job can read, so the heavy-job slots cannot be counted: remove it" >&2; exit 2; fi; \
+        exec 9<"$$gs_f"; gs_r=0; gs_lock || gs_r=$$?; [ "$$gs_r" = 75 ] || break 2; gs_i=$$((gs_i + 1)); done; \
+      if [ -z "$$gs_w" ]; then gs_w=0; elif [ "$$gs_w" = 0 ]; then gs_w=1; gs_h=; gs_i=1; while [ "$$gs_i" -le "$$gs_n" ]; do gs_o=; gs_f=$$gs_d/slot.$$gs_i.who; \
+          if [ -f "$$gs_f" ] && [ ! -L "$$gs_f" ]; then read -r gs_o < "$$gs_f" || :; fi; gs_h="$$gs_h$${gs_h:+; }$${gs_o:-slot $$gs_i: holder unknown}"; gs_i=$$((gs_i + 1)); done; \
+        echo "$$gs_job: waiting for a heavy-job slot ($$gs_n in use in $$gs_d, held by: $$gs_h)" >&2; fi; \
+      sleep 1; done; \
+    [ "$$gs_r" = 0 ] || { echo "REFUSING: could not lock the heavy-job slot $$gs_f with flock(1) or python3 (exit $$gs_r)" >&2; exit 2; }; \
+    gs_who; fi;
 
 # The test/build base. Matches requires-python (>=3.14) and .luxlint.toml [python].target,
 # so the suite runs on the interpreter the code targets (luxarch repo.python_version_consistent).
@@ -216,7 +362,7 @@ test: ## pytest against the INSTALLED package (canonical config), then the cover
 # Both targets fire on their own via the committed git hooks in hooks/ (core.hooksPath,
 # installed by `luxlint --emit-hooks | sh`): pre-commit runs gitleaks-staged, pre-push runs
 # gitleaks. That is the belt; `make check` is the braces.
-# luxarch:gitleaks asset v17 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit gitleaks`.
+# luxarch:gitleaks asset v20 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit gitleaks`.
 # ── The privacy gate: EVERY surface a commit publishes ──────────────────────────────────────────
 # Emitted by `luxarch --emit gitleaks`. Drop in verbatim.
 #
@@ -232,6 +378,12 @@ test: ## pytest against the INSTALLED package (canonical config), then the cover
 # scan and the push hook: seven commits in one public repo, found only when a file repeated the name.
 # Every commit and annotated-tag message in history is now scanned with the same config as file
 # content, and `gitleaks-commit-msg` scans the message being written (run by hooks/commit-msg).
+
+# The fleet's makefiles need GNU make 4 or later. macOS ships GNU make 3.81, which cannot read this
+# block (nor some others) and would stop every target with a parse error. make reads lines in order,
+# so this refusal comes first and says what to do: `brew install make`, then run `gmake` (or put
+# "$(brew --prefix)/opt/make/libexec/gnubin" first on PATH, so `make` is GNU make 4).
+$(if $(filter 3.%,$(MAKE_VERSION)),$(error REFUSING: GNU make $(MAKE_VERSION) is too old for this Makefile; it needs GNU make 4 or later. On macOS: brew install make; then run gmake))
 
 # Commit identities this repo accepts. The fleet account's `users.noreply.github.com` address, plus
 # GitHub's own web-UI committer. Widen ONLY for a real outside contributor, with a comment saying who.
@@ -252,7 +404,12 @@ test: ## pytest against the INSTALLED package (canonical config), then the cover
 # v12: the fleet ACCOUNT, not any noreply address. v11 accepted `<anyone@users.noreply.github.com>`, so a
 # stranger's (or a second account's) noreply committer passed. Measured: the fleet's whole history holds
 # exactly two noreply identities, the fleet account and GitHub's web-UI committer.
+# The allowance is read from the makefile only: set it there, above this block, to add an identity.
+# The identity pass refuses one from the environment or the command line, where a value left in
+# the shell (`GIT_IDENTITY_OK=.`) would match every author and pass any identity. It is never
+# exported, so a bare `export` in the makefile does not hand it to a sub-make as such a value.
 GIT_IDENTITY_OK ?= <214140984\+luxardolabs@users\.noreply\.github\.com>$$|<noreply@github\.com>$$
+unexport GIT_IDENTITY_OK
 
 # The secret scanner, PINNED and MIRRORED in the fleet registry. The fleet bans a moving tag
 # everywhere it can see one, and this used to ship `ghcr.io/gitleaks/gitleaks:latest` inside the asset every
@@ -287,14 +444,59 @@ GITLEAKS_IMAGE = $(if $(findstring /,$(LUXLINT)),$(dir $(LUXLINT)),zricethezav/)
 # never reported.
 # v17: the same for every `sed`, `sort` and `grep` that reads history bytes. BSD `grep` erroring on a
 # non-UTF-8 author name inside `|| true` left the identity pass empty, so it PASSED having read nothing.
+# Every pass reads this checkout's repository, never one a caller's GIT_DIR (or a git hook's) names:
+# the variables that point git elsewhere or change what it reads are unset for each pass.
+# Every pass reads the commits a push publishes, never a local `git replace` that shows git another
+# commit (another identity, message, path or content) in their place.
+# The repository's own config cannot change what a pass reads either: each pass, the history scan's
+# container included, runs git with these settings as command-line config, which outranks every config
+# file. `core.useReplaceRefs=false`: git 2.39 (the git macOS ships) lets a repository's `true` turn
+# replace refs back on over GIT_NO_REPLACE_OBJECTS. `i18n.logOutputEncoding=UTF-8`: a repository set to
+# UTF-16 or UTF-32 output re-encodes every record git prints, the passes' header lines included, and
+# the message and identity passes then read nothing. `core.bigFileThreshold=512m` (git's default): a
+# lower one makes git treat every file as binary and print no patch. `diff.relative=false`: a relative
+# diff drops every path outside the directory git runs in. `log.follow=false`: the binary pass reads
+# one path per `git log`, which `log.follow` turns into following a rename to another file.
+override GITLEAKS_GIT_CONFIG := GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_0=core.useReplaceRefs GIT_CONFIG_VALUE_0=false GIT_CONFIG_KEY_1=i18n.logOutputEncoding GIT_CONFIG_VALUE_1=UTF-8 GIT_CONFIG_KEY_2=core.bigFileThreshold GIT_CONFIG_VALUE_2=512m GIT_CONFIG_KEY_3=diff.relative GIT_CONFIG_VALUE_3=false GIT_CONFIG_KEY_4=log.follow GIT_CONFIG_VALUE_4=false
+override GITLEAKS_HISTORY_ENV := unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_GRAFT_FILE GIT_NAMESPACE GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM; export $(GITLEAKS_GIT_CONFIG);
+gitleaks: override export GIT_NO_REPLACE_OBJECTS := 1
 gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks cover commit/push)
-	@set -e; C=$$(mktemp); O=$$(mktemp); trap 'rm -f "$$C" "$$O"' EXIT INT TERM; \
+	+@$(if $(or $(findstring i,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring t,$(filter-out -%,$(firstword $(MAKEFLAGS))))),$(error REFUSING: make -i or -t would let a finding pass: run make gitleaks without it))$(if $(filter --eval=% -I% --include-dir%,$(filter-out $(MAKEOVERRIDES),$(MAKEFLAGS))),$(error REFUSING: --eval or -I adds makefile text from outside, which could set the identity allowance: run make gitleaks without it))$(if $(strip $(MAKEFILES)),$(error REFUSING: MAKEFILES ($(MAKEFILES)) reads other makefiles before this one: unset it))$(foreach v,SHELL .SHELLFLAGS,$(if $(filter environment% command,$(origin $(v))),$(error REFUSING: $(v) comes from the $(origin $(v)), so the scan would run in another shell)))true
+	@# A caller cannot change what this scan reads or how its failures count: make's -i and -t, makefile
+	@# text from --eval, -I or MAKEFILES (each could set the identity allowance), and a SHELL or
+	@# .SHELLFLAGS from outside are refused before any pass runs, on the first line, a `+` line: make runs
+	@# it under -t too, and under .ONESHELL the first line's prefix is the recipe's.
+	@# A shallow clone and a graft file each make git (and so every pass) read part of the history,
+	@# and the scanned-nothing check below agrees with them: both are refused before any pass. A
+	@# merge commit's own changes are read against its first parent (`--diff-merges=first-parent`), in
+	@# this scan and the binary and path passes: git shows a merge no diff by default, so a secret
+	@# only a merge added passed every pass. A partial clone (blobs fetched on demand, which the scan
+	@# container cannot do) is refused like a shallow one, and so is a scan whose git log failed partway
+	@# (gitleaks reports `ERR` and still exits 0). Every log reads the root commit (`--root`), without
+	@# the repository's textconv drivers or display settings, which could hide a file or the output.
+	@# The scan reads the repository's git directory, never the checkout: gitleaks runs in an empty
+	@# directory with `GIT_DIR` naming that git directory and that empty directory as the work tree, so
+	@# no `core.worktree` the repository sets (a submodule's points outside the mounts) and no
+	@# `.gitattributes` in the checkout applies. gitleaks reads a `.gitleaksignore` from the
+	@# directory it scans and from its ignore path, and both are that empty directory, so no file in the
+	@# checkout (tracked, untracked or excluded) waives a finding. A leak that reached history is
+	@# removed from it, never waived.
+	@set -e; $(GITLEAKS_HISTORY_ENV) C=$$(mktemp); O=$$(mktemp); E=$$(mktemp -d); trap 'rm -rf "$$C" "$$O" "$$E"' EXIT INT TERM; \
+	[ "$$(git rev-parse --is-shallow-repository)" = false ] || { echo "REFUSING: this clone is shallow, so the scan would read only part of the published history: run git fetch --unshallow first."; exit 1; }; \
+	if [ -n "$$(git config --get extensions.partialClone)" ] || git config --type=bool --get-regexp '^remote\..*\.promisor$$' | grep -q ' true$$'; then \
+	  echo "REFUSING: this is a partial clone, so the scan cannot read the blobs it lacks: clone the repository in full first."; exit 1; fi; \
+	gf=$$(git rev-parse --path-format=absolute --git-path info/grafts); [ ! -e "$$gf" ] || { echo "REFUSING: $$gf rewrites history's parents, so the scan would skip the commits it hides: remove it (git replace --convert-graft-file) first."; exit 1; }; \
 	G=$$(git -C "$(CURDIR)" rev-parse --path-format=absolute --git-common-dir); \
+	A=$$(git -C "$(CURDIR)" rev-parse --absolute-git-dir); \
 	n=$$(git -C "$(CURDIR)" rev-list --count --all); \
 	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
-	rc=0; docker run --rm -v "$(CURDIR)":/repo -v "$$G":"$$G":ro -v "$$C":/gl.toml:ro -w /repo \
-	  $(GITLEAKS_IMAGE) git /repo -c /gl.toml --redact -v --ignore-gitleaks-allow > "$$O" 2>&1 || rc=$$?; \
+	rc=0; docker run --rm -e GIT_NO_REPLACE_OBJECTS=1 $(foreach kv,$(GITLEAKS_GIT_CONFIG),-e $(kv)) -e GIT_DIR="$$A" -e GIT_WORK_TREE=/scan -v "$$G":"$$G":ro -v "$$C":/gl.toml:ro -v "$$E":/scan:ro -w /scan \
+	  $(GITLEAKS_IMAGE) git /scan -c /gl.toml --redact -v --ignore-gitleaks-allow --gitleaks-ignore-path /scan \
+	  --log-opts='--all --full-history --root --diff-merges=first-parent --no-textconv --no-ext-diff --no-color --pretty=medium --date=default --no-abbrev-commit' > "$$O" 2>&1 || rc=$$?; \
 	cat "$$O"; [ "$$rc" -eq 0 ] || exit "$$rc"; \
+	if LC_ALL=C grep -Eq 'stderr is not empty|ERR[^A-Za-z]*\[git\]' "$$O"; then \
+	  echo "REFUSING: git failed partway through the history scan (ERR above), so what it had not read yet was never scanned."; exit 1; \
+	fi; \
 	if [ "$$n" -gt 0 ] && ! grep -Eq '(^|[^0-9])[1-9][0-9]* commits scanned' "$$O"; then \
 	  echo "REFUSING: gitleaks scanned no commit of a history holding $$n: the history scan read nothing (above)."; exit 1; \
 	fi
@@ -302,17 +504,26 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	@# treats as binary: a NUL byte, UTF-16 (a `Localizable.strings`), or a `binary` / `-diff` attribute.
 	@# A token in any of them reached the remote with "no leaks found". So every path git ever showed as
 	@# binary is re-read as text, NULs stripped, and scanned by path (the config's path allowlists hold).
-	@set -e; C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
+	@# Which paths are binary is read from an empty work tree, run there, as the history scan reads
+	@# them, so a `.gitattributes` in the checkout (committed or not) calls no file text here that the
+	@# scan saw no patch for.
+	@set -e; $(GITLEAKS_HISTORY_ENV) C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
 	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
-	git -c core.quotePath=false log --branches --tags HEAD --format= -p --no-ext-diff --no-textconv \
-	  > "$$D/patches"; \
-	LC_ALL=C sed -n 's|^Binary files .* and b/\(.*\) differ$$|\1|p' "$$D/patches" | LC_ALL=C sort -u > "$$D/binary"; \
+	mkdir "$$D/t" "$$D/none"; \
+	git log --branches --tags HEAD --format= --name-only -z --root --diff-merges=first-parent > "$$D/names"; \
+	nl=$$(LC_ALL=C tr -cd '\n' < "$$D/names" | wc -c); \
+	[ "$$nl" -eq 0 ] || { echo "REFUSING: a path in history holds a newline, which this scan cannot name: rename it."; exit 1; }; \
+	A=$$(git -C "$(CURDIR)" rev-parse --absolute-git-dir); \
+	git -C "$$D/none" --git-dir="$$A" --work-tree="$$D/none" -c color.ui=never log --branches --tags HEAD --format= --numstat -z --no-renames --root \
+	  --diff-merges=first-parent --no-ext-diff --no-textconv > "$$D/numstat"; \
+	T=$$(printf '\t'); LC_ALL=C tr '\000' '\n' < "$$D/numstat" | LC_ALL=C sed -n "s/^-$$T-$$T//p" \
+	  | LC_ALL=C sort -u > "$$D/binary"; \
 	if [ -s "$$D/binary" ]; then \
-	  mkdir "$$D/t" "$$D/none"; \
 	  while IFS= read -r f; do \
 	    mkdir -p "$$D/t/$$(dirname "$$f")"; \
-	    git -c core.quotePath=false log --branches --tags HEAD --format= -p --text --no-ext-diff \
-	      --no-textconv -- "$$f" > "$$D/p"; \
+	    git -c color.ui=never -c diff.noprefix=false --literal-pathspecs log --branches --tags HEAD \
+	      --format= -p --text --no-color --src-prefix=a/ --dst-prefix=b/ --root --diff-merges=first-parent \
+	      --no-ext-diff --no-textconv -- "$$f" > "$$D/p"; \
 	    LC_ALL=C grep -a '^+' "$$D/p" | LC_ALL=C tr -d '\000' > "$$D/t/$$f"; \
 	  done < "$$D/binary"; \
 	  docker run --rm -v "$$D/t":/scan:ro -w /scan -v "$$D/none":/none:ro -v "$$C":/gl.toml:ro \
@@ -322,7 +533,7 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	@# v13: every commit and annotated-tag MESSAGE, scanned as a file with the same config (credential
 	@# rules and the denylist). One `git log` and one `for-each-ref`, split on a header line carrying a
 	@# per-run nonce, so a message cannot forge a header and steer its own lines out of the scan.
-	@set -e; C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
+	@set -e; $(GITLEAKS_HISTORY_ENV) C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
 	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
 	N=$$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n'); [ $${#N} -eq 32 ]; \
 	mkdir -p "$$D/t/commit-message" "$$D/t/tag-message" "$$D/none"; \
@@ -343,10 +554,11 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	@# v14: what a push publishes besides content and messages: every file PATH in history and every
 	@# branch and tag NAME. A path is not a patch line, so `gitleaks git` never read one, and a file or
 	@# a branch named for an internal host passed every gate into a public remote.
-	@set -e; C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
+	@set -e; $(GITLEAKS_HISTORY_ENV) C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
 	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
 	mkdir -p "$$D/t" "$$D/none"; \
-	git -c core.quotePath=false log --branches --tags HEAD --format= --name-only | LC_ALL=C sort -u > "$$D/t/paths"; \
+	git -c core.quotePath=false -c color.ui=never log --branches --tags HEAD --format= --name-only \
+	  --root --diff-merges=first-parent > "$$D/names"; LC_ALL=C sort -u < "$$D/names" > "$$D/t/paths"; \
 	git for-each-ref --format='%(refname:short)' refs/heads refs/tags > "$$D/t/ref-names"; \
 	docker run --rm -v "$$D/t":/scan:ro -w /scan -v "$$D/none":/none:ro -v "$$C":/gl.toml:ro \
 	  $(GITLEAKS_IMAGE) dir . -c /gl.toml --redact -v --ignore-gitleaks-allow \
@@ -359,7 +571,7 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	@# Walks what THIS repo publishes (branches, tags, HEAD), NOT `--all`: a remote-tracking ref caches the
 	@# remote's state, which during a scrub is by definition the un-rewritten history you are about to
 	@# force-push over — `--all` refused the verified fix, and any `git fetch` re-armed it.
-	@bad=$$(git log --branches --tags HEAD --pretty='%an <%ae>%n%cn <%ce>' 2>/dev/null | LC_ALL=C sort -u \
+	@$(if $(filter environment% command,$(origin GIT_IDENTITY_OK)),$(error REFUSING: GIT_IDENTITY_OK comes from the $(origin GIT_IDENTITY_OK), so the caller chose which authors pass the identity pass: set it in the makefile))$(GITLEAKS_HISTORY_ENV) bad=$$(git log --branches --tags HEAD --pretty='%an <%ae>%n%cn <%ce>' 2>/dev/null | LC_ALL=C sort -u \
 	  | LC_ALL=C grep -vE '$(GIT_IDENTITY_OK)' || true); \
 	if [ -n "$$bad" ]; then \
 	  echo "REFUSING: a non-fleet identity appears in commit METADATA (author/committer):"; \
@@ -390,7 +602,7 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 # `$$GIT_INDEX_FILE`: `git commit -a` and `git commit <path>` were never scanned. It also read git's
 # patches, which skip binary, NUL, UTF-16 and `-diff` files, and it honoured a `# gitleaks:allow` on
 # the secret's own line and a committed `.gitleaksignore`, so a commit's author could waive their own
-# leak. New content gets no waiver: `.gitleaksignore` stays a ledger for the full-history scan only.
+# leak. No pass reads a `.gitleaksignore`: neither new content nor history gets a waiver.
 gitleaks-staged: ## secret scan of the STAGED changes (run by hooks/pre-commit)
 	@set -e; C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
 	docker run --rm -v "$(CURDIR)":/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \

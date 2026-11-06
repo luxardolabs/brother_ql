@@ -1,6 +1,6 @@
 {
   "guard": "luxarch",
-  "guard_version": "0.327.0",
+  "guard_version": "0.344.0",
   "repo": "/repo",
   "targets": [
     {
@@ -61,10 +61,21 @@
           "inert_reason": "",
           "fix": "",
           "example": ""
+        },
+        {
+          "rule": "fw.broad_except_is_logged",
+          "status": "PASS",
+          "since": "0.330.0",
+          "violations": 0,
+          "deferred": false,
+          "inert": false,
+          "inert_reason": "",
+          "fix": "",
+          "example": ""
         }
       ],
       "summary": {
-        "PASS": 5,
+        "PASS": 6,
         "FAIL": 0,
         "XFAIL": 0,
         "XPASS": 0,
@@ -170,6 +181,28 @@
         "deferred": false,
         "inert": true,
         "inert_reason": "not an app-kind target: a guard or library may depend on these tools as its product",
+        "fix": "",
+        "example": ""
+      },
+      {
+        "rule": "repo.runtime_user_cannot_write_code",
+        "status": "INERT",
+        "since": "0.334.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "not a service kind: no service image to judge (the guards' mount-only images are out of scope)",
+        "fix": "",
+        "example": ""
+      },
+      {
+        "rule": "repo.build_context_hygiene",
+        "status": "INERT",
+        "since": "0.339.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no Dockerfile in the repo and no Makefile or compose build: no build context to judge",
         "fix": "",
         "example": ""
       },
@@ -636,6 +669,28 @@
         "example": ""
       },
       {
+        "rule": "repo.compose_oom_ranked",
+        "status": "INERT",
+        "since": "0.343.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no committed compose file anywhere in the repo \u2014 nothing to check",
+        "fix": "",
+        "example": ""
+      },
+      {
+        "rule": "repo.compose_restarts_after_kill",
+        "status": "INERT",
+        "since": "0.343.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no committed compose file anywhere in the repo \u2014 nothing to check",
+        "fix": "",
+        "example": ""
+      },
+      {
         "rule": "repo.compose_up_selects_services",
         "status": "INERT",
         "since": "0.264.0",
@@ -828,16 +883,16 @@
       "FAIL": 0,
       "XFAIL": 0,
       "XPASS": 0,
-      "INERT": 32
+      "INERT": 36
     }
   },
   "summary": {
-    "PASS": 41,
+    "PASS": 42,
     "FAIL": 0,
     "XFAIL": 0,
     "XPASS": 0,
-    "INERT": 32
+    "INERT": 36
   },
-  "commit": "4214748874e1c242deb2430727e769282eeaedd3",
-  "generated_at": "2026-10-27T02:55:49Z"
+  "commit": "7935373a9d1d44c8bfc8ecbce1b1817d49f7869e",
+  "generated_at": "2026-11-06T03:21:06Z"
 }

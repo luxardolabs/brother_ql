@@ -1,6 +1,6 @@
 {
   "guard": "luxlint",
-  "guard_version": "0.70.0",
+  "guard_version": "0.74.0",
   "repo": "/repo",
   "source": [
     "src/brother_ql"
@@ -58,6 +58,14 @@
       "rule": "secret.githooks_wired",
       "status": "PASS",
       "since": "0.10.0",
+      "violations": 0,
+      "sites": [],
+      "deferred": false
+    },
+    {
+      "rule": "secret.gitleaks_allow_live",
+      "status": "PASS",
+      "since": "0.71.0",
       "violations": 0,
       "sites": [],
       "deferred": false
@@ -187,13 +195,13 @@
     }
   ],
   "summary": {
-    "PASS": 19,
+    "PASS": 20,
     "FAIL": 0,
     "XFAIL": 0,
     "XPASS": 0,
     "INERT": 3
   },
   "mypy": "separate: `luxlint --mypy` ([mypy].baseline ratchet)",
-  "commit": "4214748874e1c242deb2430727e769282eeaedd3",
-  "generated_at": "2026-10-27T02:55:49Z"
+  "commit": "7935373a9d1d44c8bfc8ecbce1b1817d49f7869e",
+  "generated_at": "2026-11-06T03:21:06Z"
 }
