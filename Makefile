@@ -250,7 +250,7 @@ override REFUSE_OTHER_TREE = $(if $(and $(filter command,$(origin CURDIR)),$(if 
 # stops make under `-i`, and a recipe's own refusal in a sub-make is discarded by a parent's `-i`.
 # MAKEFLAGS typed as a variable, or emptied with --eval, hides the flags in force from every test
 # that reads it, so that comes first. It holds under a dry run too: it is how one would be faked.
-override REFUSE_IGNORED = $(if $(filter command override,$(origin MAKEFLAGS))$(filter command,$(origin GNUMAKEFLAGS)),$(error REFUSING: MAKEFLAGS or GNUMAKEFLAGS was set from the command line, so make $@ cannot tell which flags are in force: pass make's flags as flags))$(if $(or $(findstring i,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring t,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring e,$(filter-out -%,$(firstword $(MAKEFLAGS))))),$(error REFUSING: make -i ignores failures, -t touches what it should run and -e lets the environment override the makefile, so make $@ could report what never passed: run it without them))
+override REFUSE_IGNORED = $(if $(filter-out default,$(origin MAKE_COMMAND))$(subst $$(MAKE_COMMAND),,$(value MAKE)),$(error REFUSING: MAKE is not make's own, so make $@ would report what never ran))$(if $(filter command override,$(origin MAKEFLAGS))$(filter command,$(origin GNUMAKEFLAGS)),$(error REFUSING: MAKEFLAGS or GNUMAKEFLAGS was set from the command line, so make $@ cannot tell which flags are in force: pass make's flags as flags))$(if $(or $(findstring i,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring t,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring e,$(filter-out -%,$(firstword $(MAKEFLAGS))))),$(error REFUSING: make -i ignores failures, -t touches what it should run and -e lets the environment override the makefile, so make $@ could report what never passed: run it without them))
 
 ##@ Gates
 
@@ -735,37 +735,36 @@ gitleaks-commit-msg: ## secret + denylist scan of the commit MESSAGE being writt
 # v$(VERSION) tag, and a GitHub Release carrying that version's notes. A release is a TAG
 # PLUS A RELEASE OBJECT — a bare tag leaves /releases empty and the notes unused. The
 # ordered ritual (including the LuxPM mirror) is .claude/skills/release/SKILL.md.
-RELEASE_VERSION := $(shell cat VERSION 2>/dev/null)
+RELEASE_VERSION := $(shell git show HEAD:VERSION 2>/dev/null)
+RELEASE_HEAD := $(shell git rev-parse HEAD 2>/dev/null)
 
 # One shell per step, and `$(MAKE)` on lines of its own: make EXECUTES any line that
 # mentions $(MAKE) even under `make -n`, so a single-line recipe would really tag, push and
 # publish on a dry run. Under `make -n` the gate exits 1 with no verdict, which ends the dry run
 # there, so it prints neither the tag nor the publish.
-# It takes no arguments: one rule, not a list of spellings. Three rounds passed a list in a new
-# spelling, and a check reading make's own variables cannot hold, because makefile text from `--eval`
-# rewrites them (`release: MAKEFLAGS:=`, `release: guard_dry:=n`). So the first line reads how make
-# was really started, from /proc, which make cannot rewrite. It is written out here, not in a
-# variable, and asks for a positive `ok`, so a shell that prints nothing is refused. An expansion
-# error stops make under `.IGNORE`, where a failing shell line would not. `-n` is matched exactly,
-# so it is a real dry run. Stated limit: caller-supplied makefile text is code. A `$$(shell ...)` in
-# `--eval`, or a planted program on PATH, runs before or instead of any check, and is no more than
-# running git and gh by hand.
+# It takes no arguments, and a check reading make's own variables cannot hold that, because makefile
+# text from `--eval` rewrites them. So the first line asks scripts/release-preflight.sh, which reads how
+# make was really started. It is written out here, not in a variable, and an expansion error stops make
+# under `.IGNORE`, where a failing shell line would not. The commit judged is the commit tagged: the
+# last line refuses a tree that moved during the gate, and names that commit in the tag and the push.
 release: ## Tag, push, build and publish the GitHub Release for the VERSION file's version
-	+@$(if $(filter-out /bin/sh -c,$(SHELL) $(.SHELLFLAGS)),$(error REFUSING: SHELL or .SHELLFLAGS was changed, so make $@ cannot read how it was started))$(if $(filter ok,$(shell a=$$(tr '\0' ' ' </proc/$$PPID/cmdline | cut -d' ' -f2-); case "$$a" in (release\ |-n\ release\ |release\ -n\ ) ;; (*) echo arguments; exit;; esac; if [ ! -r /proc/$$PPID/environ ] || tr '\0' '\n' </proc/$$PPID/environ | grep -qE '^(MAKEFLAGS|GNUMAKEFLAGS|MAKEFILES|MAKEOVERRIDES|MAKE|MAKE_COMMAND|\.SHELLFLAGS|LUX_REGISTRY|LUXARCH_IMAGE|LUXLINT_IMAGE|LUXAUDIT_IMAGE|TAIL_IMAGE|GIT_IDENTITY_OK)='; then echo environment; else echo ok; fi)),,$(error REFUSING: make $@ takes no arguments, and nothing that steers it may come from the environment (MAKEFLAGS, GNUMAKEFLAGS, MAKEFILES, an image or registry). Run it bare on Linux, and put settings in Makefile.local))true
+	+@$(if $(filter-out /bin/sh -c,$(SHELL) $(.SHELLFLAGS)),$(error REFUSING: SHELL or .SHELLFLAGS was changed, so make $@ cannot read how it was started))$(if $(filter ok,$(shell /usr/bin/env -i HOME="$$HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-preflight.sh /proc/$$PPID)),,$(error REFUSING: make $@ stopped: the reason is above))true
 	@set -e; \
-	[ -n "$(RELEASE_VERSION)" ] || { echo "release: VERSION is empty"; exit 1; }; \
-	[ -z "$$(git status --porcelain)" ] || { echo "release: working tree is dirty — commit first"; exit 1; }; \
-	grep -q "^## $(RELEASE_VERSION) " CHANGELOG.md || { echo "release: CHANGELOG.md has no '## $(RELEASE_VERSION)' section"; exit 1; }; \
-	if git rev-parse -q --verify refs/tags/v$(RELEASE_VERSION) >/dev/null; then echo "release: tag v$(RELEASE_VERSION) already exists"; exit 1; fi
+	git fetch -q origin; \
+	if git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then \
+	  git merge-base --is-ancestor origin/main HEAD || { echo "release: origin/main has commits this checkout does not: pull first"; exit 1; }; \
+	fi; \
+	[ -z "$$(git ls-remote --tags origin refs/tags/v$(RELEASE_VERSION))" ] || { echo "release: tag v$(RELEASE_VERSION) already exists on origin"; exit 1; }
 	@$(MAKE) --no-print-directory check
 	@rm -rf dist
 	@$(MAKE) --no-print-directory build
 	@set -e; N=$$(mktemp); trap 'rm -f "$$N"' EXIT INT TERM; \
-	awk '/^## $(RELEASE_VERSION) /{f=1;next} /^## /{f=0} f' CHANGELOG.md > "$$N"; \
-	git tag -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)"; \
-	git push origin HEAD; \
-	git push origin v$(RELEASE_VERSION); \
-	gh release create v$(RELEASE_VERSION) --title "$(RELEASE_VERSION)" --notes-file "$$N" dist/*; \
+	[ "$$(git rev-parse HEAD)" = "$(RELEASE_HEAD)" ] || { echo "release: HEAD moved during the gate, so that commit was not judged: run it again"; exit 1; }; \
+	[ -z "$$(git status --porcelain --untracked-files=all)" ] || { echo "release: the working tree changed during the gate: run it again"; exit 1; }; \
+	git show HEAD:CHANGELOG.md | awk -v h='## $(RELEASE_VERSION) ' 'index($$0, h) == 1 { f = 1; next } /^## / { f = 0 } f' > "$$N"; \
+	git tag -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD); \
+	git push --atomic origin $(RELEASE_HEAD):refs/heads/main v$(RELEASE_VERSION) || { git tag -d v$(RELEASE_VERSION); echo "release: the push failed, so nothing was published and the local tag was removed"; exit 1; }; \
+	gh release create v$(RELEASE_VERSION) --title "$(RELEASE_VERSION)" --notes-file "$$N" dist/* || { trap - EXIT INT TERM; echo "release: v$(RELEASE_VERSION) is pushed but has no Release. Finish it with: gh release create v$(RELEASE_VERSION) --title $(RELEASE_VERSION) --notes-file $$N dist/*"; exit 1; }; \
 	echo "released v$(RELEASE_VERSION) — now mirror it to LuxPM (see .claude/skills/release/SKILL.md)"
 
 ##@ Build

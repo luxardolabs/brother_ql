@@ -82,32 +82,27 @@ def test_flags_hidden_from_makeflags_are_refused_before_makeflags_is_read():
     assert text.index(hidden) < text.index("$(firstword $(MAKEFLAGS))")
 
 
-def test_release_judges_how_make_was_really_started_not_makes_variables():
+def test_release_asks_the_preflight_for_a_positive_answer_in_an_expansion():
     first = recipe("release")[0]
     assert first.startswith("+@$(if $(filter-out /bin/sh -c,$(SHELL) $(.SHELLFLAGS))")
-    assert "/proc/$$PPID/cmdline" in first
-    assert "/proc/$$PPID/environ" in first
-    assert "(release\\ |-n\\ release\\ |release\\ -n\\ ) ;;" in first
-    # A positive answer, so a shell that prints nothing is refused.
-    assert "$(if $(filter ok,$(shell " in first
+    assert "$(if $(filter ok,$(shell /usr/bin/env -i " in first
+    assert "PATH=/usr/bin:/bin" in first
+    assert "/bin/sh scripts/release-preflight.sh /proc/$$PPID" in first
     assert first.endswith("true")
     # Each of these can be rewritten by target-specific text from --eval.
     for variable in ("MAKEFLAGS", "guard_dry", "REFUSE_"):
         assert f"$({variable}" not in first
 
 
-def test_release_refuses_steering_from_the_environment():
-    first = recipe("release")[0]
-    start = first.index("grep -qE '^(") + len("grep -qE '^(")
-    names = first[start : first.index(")=", start)].split("|")
-    for name in (
-        "MAKEFLAGS",
-        "GNUMAKEFLAGS",
-        "MAKEFILES",
-        "LUX_REGISTRY",
-        "TAIL_IMAGE",
-    ):
-        assert name in names
+def test_the_release_tags_the_commit_it_judged_from_what_head_holds():
+    assert "RELEASE_VERSION := $(shell git show HEAD:VERSION 2>/dev/null)" in MAKEFILE
+    text = "\n".join(recipe("release"))
+    assert text.index("--no-print-directory check") < text.index("HEAD moved")
+    assert (
+        'git tag -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD)'
+        in text
+    )
+    assert "git push --atomic origin $(RELEASE_HEAD):refs/heads/main" in text
 
 
 def test_the_other_tree_refusal_cannot_be_overridden_and_spares_this_tree():
