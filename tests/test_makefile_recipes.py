@@ -107,12 +107,16 @@ def test_the_release_tags_the_commit_it_judged_from_what_head_holds():
         'git tag -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD)'
         in text
     )
-    assert "git push --atomic origin $(RELEASE_HEAD):refs/heads/main" in text
+    assert (
+        "git -c push.followTags=false push --atomic origin $(RELEASE_HEAD):refs/heads/main"
+        in text
+    )
 
 
 def test_the_artifacts_come_from_an_export_of_the_judged_commit():
     text = "\n".join(recipe("release"))
-    assert 'git archive --format=tar $(RELEASE_HEAD) | tar -x -C "$$D"' in text
+    assert '/bin/sh scripts/release-export.sh $(RELEASE_HEAD) "$$D"' in text
+    assert "git archive" not in text
     assert '$(call BUILD_ARTIFACTS,"$$D")' in text
     assert "dist/brother_ql-$(RELEASE_VERSION).tar.gz" in text
     assert text.index("BUILD_ARTIFACTS") < text.index("git tag -a")
@@ -137,6 +141,24 @@ def test_a_failed_push_reads_origin_before_saying_what_happened():
     text = "\n".join(recipe("release"))
     read = "git ls-remote --tags origin refs/tags/v$(RELEASE_VERSION)"
     assert text.index(read) < text.index("nothing was published")
+    # A tag on origin is only ours if it names the judged commit.
+    assert '[ "$$P" = "$(RELEASE_HEAD)" ]' in text
+
+
+def test_gh_is_checked_before_the_gate_so_a_release_cannot_stop_half_way():
+    text = "\n".join(recipe("release"))
+    gate = text.index("--no-print-directory check")
+    assert text.index("command -v gh") < gate
+    assert text.index("gh auth status") < gate
+
+
+def test_an_interrupt_stops_the_recipe_shell():
+    text = "\n".join(recipe("release"))
+    assert "trap 'rm -f \"$$N\"; exit 130' INT TERM" in text
+    assert "trap 'rm -rf \"$$D\"; exit 130' INT TERM" in text
+    assert "EXIT INT TERM" not in text
+    # From the tag on, the notes stay for the command that finishes the Release.
+    assert text.index("trap - EXIT;") < text.index("git tag -a")
 
 
 def test_the_other_tree_refusal_cannot_be_overridden_and_spares_this_tree():

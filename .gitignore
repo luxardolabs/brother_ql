@@ -197,3 +197,4 @@ node_modules/
 .claude/.*.lock
 .claude/.*.tmp
 .claude/.*.unreadable-*
+.ruff_cache/

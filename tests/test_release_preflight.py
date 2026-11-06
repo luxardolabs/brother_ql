@@ -7,6 +7,7 @@ Copyright (C) 2025 Luxardo Labs
 Licensed under GPL-3.0-or-later
 """
 
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -21,10 +22,12 @@ case "$*" in
 "rev-parse --show-toplevel") pwd -P ;;
 "symbolic-ref -q HEAD") echo refs/heads/main ;;
 "for-each-ref refs/replace") ;;
-"remote get-url origin" | "remote get-url --push origin") echo https://example.invalid/r.git ;;
+"remote get-url origin" | "remote get-url --push origin") echo https://github.com/luxardolabs/brother_ql.git ;;
+"config --get "*) ;;
+"ls-files -oi --exclude-standard" | "ls-files -oi --exclude-from=.gitignore") ;;
 "-c core.fsmonitor=false status --porcelain --untracked-files=all") ;;
-"ls-tree -r HEAD") printf '100644 blob aaaa\\tVERSION\\n' ;;
-"hash-object --no-filters VERSION") echo aaaa ;;
+"-c core.quotepath=off ls-tree -r HEAD") printf '100644 blob aaaa\\tVERSION\\n' ;;
+"hash-object --no-filters -- VERSION") echo aaaa ;;
 "show HEAD:VERSION") echo 1.0.0 ;;
 "show HEAD:CHANGELOG.md") printf '## 1.0.0 - x\\n\\nnotes\\n' ;;
 "rev-parse -q --verify refs/tags/v1.0.0") exit 1 ;;
@@ -95,18 +98,40 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
             "echo ' M x' ;;",
             "dirty",
         ),
-        ('"ls-tree -r HEAD") exit 128 ;;', "tree at HEAD"),
-        ('"ls-tree -r HEAD") ;;', "tree at HEAD"),
-        ('"hash-object --no-filters VERSION") echo bbbb ;;', "VERSION on disk"),
-        ('"hash-object --no-filters VERSION") exit 128 ;;', "VERSION on disk"),
+        ('"-c core.quotepath=off ls-tree -r HEAD") exit 128 ;;', "tree at HEAD"),
+        ('"-c core.quotepath=off ls-tree -r HEAD") ;;', "tree at HEAD"),
+        ('"hash-object --no-filters -- VERSION") echo bbbb ;;', "VERSION on disk"),
+        ('"hash-object --no-filters -- VERSION") exit 128 ;;', "VERSION on disk"),
         (
-            "\"ls-tree -r HEAD\") printf '120000 blob aaaa\\tVERSION\\n' ;;",
+            "\"-c core.quotepath=off ls-tree -r HEAD\") printf '120000 blob aaaa\\tVERSION\\n' ;;",
             "VERSION on disk",
         ),
         (
-            "\"ls-tree -r HEAD\") printf '160000 commit aaaa\\tVERSION\\n' ;;",
+            "\"-c core.quotepath=off ls-tree -r HEAD\") printf '160000 commit aaaa\\tVERSION\\n' ;;",
             "VERSION on disk",
         ),
+        # A name that is only spaces must not read as no difference found.
+        (
+            '"-c core.quotepath=off ls-tree -r HEAD") printf \'100644 blob bbbb\\t   \\n'
+            '100644 blob aaaa\\tVERSION\\n\' ;;\n"hash-object --no-filters --    ") echo cccc ;;',
+            "on disk",
+        ),
+        (
+            '"-c core.quotepath=off ls-tree -r HEAD") '
+            "printf '100644 blob aaaa\\t\"a\\\\tb\"\\n' ;;",
+            "rename it",
+        ),
+        (
+            '"remote get-url origin" | "remote get-url --push origin") echo /fork.git ;;',
+            "origin is",
+        ),
+        ('"config --get core.sshCommand") echo evil ;;', "core.sshCommand"),
+        ('"config --get remote.origin.receivepack") echo evil ;;', "receivepack"),
+        (
+            '"ls-files -oi --exclude-standard") echo hidden.py ;;',
+            "committed .gitignore",
+        ),
+        ('"ls-files -oi --exclude-standard") exit 128 ;;', "ignored files"),
         ('"show HEAD:VERSION") echo 1.0.0 main ;;', "X.Y.Z"),
         ('"show HEAD:VERSION") exit 128 ;;', "X.Y.Z"),
         ('"show HEAD:CHANGELOG.md") printf "## 1.0.0 - x\\n" ;;', "no notes"),
@@ -224,6 +249,8 @@ def test_a_name_that_would_change_what_the_gate_runs_is_refused(tmp_path, name):
         b"GIT_EXEC_PATH=/tmp/other",
         b"GH_CONFIG_DIR=/tmp/other",
         b"GLOBIGNORE=dist/*.whl",
+        b"GIT_SSH=/tmp/other",
+        b"GIT_SSH_COMMAND=/tmp/other",
         b"SHELLOPTS=noexec",
         b"BASH_ENV=/tmp/other",
         b"ENV=/tmp/other",
@@ -261,3 +288,54 @@ def test_an_unreadable_proc_is_refused_not_passed(tmp_path):
         check=True,
     )
     assert done.stdout.strip() == "refused"
+
+
+EXPORT = SCRIPT.parent / "release-export.sh"
+
+
+def export(tmp_path, listing, blobs):
+    """Run the export with a stand-in git, and return (exit status, the directory written)."""
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    arms = "".join(
+        f'"cat-file blob {k}") printf %s {shlex.quote(v)} ;;\n' for k, v in blobs.items()
+    )
+    (tools / "git").write_text(
+        '#!/bin/sh\ncase "$*" in\n'
+        f'"-c core.quotepath=off ls-tree -r abc") printf {shlex.quote(listing)} ;;\n'
+        f"{arms}*) exit 128 ;;\nesac\n"
+    )
+    (tools / "git").chmod(0o755)
+    out = tmp_path / "out"
+    out.mkdir()
+    done = subprocess.run(
+        ["/bin/sh", str(EXPORT), "abc", str(out)],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env={"PATH": f"{tools}:/usr/bin:/bin", "LC_ALL": "C"},
+    )
+    return done.returncode, out
+
+
+def test_the_export_writes_each_blob_with_its_mode(tmp_path):
+    listing = "100644 blob a1\\tsrc/a b/x.py\\n100755 blob a2\\tscripts/run\\n"
+    rc, out = export(tmp_path, listing, {"a1": "one", "a2": "two"})
+    assert rc == 0
+    assert (out / "src/a b/x.py").read_text() == "one"
+    assert (out / "scripts/run").read_text() == "two"
+    assert (out / "scripts/run").stat().st_mode & 0o100
+
+
+@pytest.mark.parametrize(
+    "listing",
+    [
+        # A blob git cannot read must stop the export, not leave a short tree.
+        "100644 blob a1\\tfirst\\n100644 blob missing\\tsecond\\n",
+        "160000 commit a1\\tmodule\\n",
+        '100644 blob a1\\t"a\\\\tb"\\n',
+        "",
+    ],
+)
+def test_an_export_it_cannot_finish_fails(tmp_path, listing):
+    assert export(tmp_path, listing, {"a1": "one"})[0] != 0
