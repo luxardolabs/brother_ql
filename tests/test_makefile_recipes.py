@@ -141,5 +141,10 @@ def test_the_version_check_fails_when_it_cannot_pull_or_read_latest():
 
 
 def test_the_commit_message_scan_is_phony():
-    phony = next(line for line in MAKEFILE.splitlines() if line.startswith(".PHONY:"))
-    assert "gitleaks-commit-msg" in phony.split()
+    declared = [
+        word
+        for line in MAKEFILE.splitlines()
+        if line.startswith(".PHONY:")
+        for word in line.split()
+    ]
+    assert "gitleaks-commit-msg" in declared
