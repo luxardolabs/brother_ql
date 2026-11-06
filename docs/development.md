@@ -80,7 +80,7 @@ tests/
 
 ## Dependencies
 
-`[project].dependencies` is exactly what the package imports: `click` (CLI), `packbits` (raster compression), `Pillow` (imaging). There is no `dev` extra — the tooling comes from the pinned images.
+`[project].dependencies` is exactly what the package imports: `click` (CLI), `packbits` (raster compression), `Pillow` (imaging). There is no `dev` extra — the tooling comes from the pinned images. `make audit` scans the newest release each range admits, so a floor must itself exclude every release with a known advisory: `Pillow>=13.0` is the first with none, and `tests/test_dependency_floors.py` holds it there.
 
 `requirements/audit.txt` is a compiled, audit-only pin of those ranges so the dependency scanner has concrete versions to check. Nothing installs from it. `make audit-lock` resolves the newest release each range admits (`uv pip compile --upgrade`), so run it whenever `[project].dependencies` changes and before trusting a clean `make audit`: a stale compile is a stale audit.
 

@@ -40,7 +40,7 @@ classifiers = [
 dependencies = [
     "click>=8.0",
     "packbits>=0.6",
-    "Pillow>=10.0",
+    "Pillow>=13.0",
 ]
 
 [project.urls]
