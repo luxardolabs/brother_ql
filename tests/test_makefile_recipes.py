@@ -38,10 +38,12 @@ def definition(name):
 
 def test_recipes_mount_the_checkout_through_the_quoted_definition():
     assert definition("CHECKOUT") == "override CHECKOUT = '$(subst ','\\'',$(CURDIR))'"
-    for target in ("audit-lock", "format", "test", "build"):
+    for target in ("audit-lock", "format", "test"):
         text = "\n".join(recipe(target))
         assert '"$(CURDIR)"' not in text, target
         assert "$(CHECKOUT):/repo" in text, target
+    assert recipe("build") == ["$(call BUILD_ARTIFACTS,$(CHECKOUT))"]
+    assert "-v $(1):/repo" in definition("BUILD_ARTIFACTS")
 
 
 def test_the_suite_holds_its_slot_in_the_recipe_shell_and_runs_capped():
@@ -106,6 +108,35 @@ def test_the_release_tags_the_commit_it_judged_from_what_head_holds():
         in text
     )
     assert "git push --atomic origin $(RELEASE_HEAD):refs/heads/main" in text
+
+
+def test_the_artifacts_come_from_an_export_of_the_judged_commit():
+    text = "\n".join(recipe("release"))
+    assert 'git archive --format=tar $(RELEASE_HEAD) | tar -x -C "$$D"' in text
+    assert '$(call BUILD_ARTIFACTS,"$$D")' in text
+    assert "dist/brother_ql-$(RELEASE_VERSION).tar.gz" in text
+    assert text.index("BUILD_ARTIFACTS") < text.index("git tag -a")
+
+
+def test_the_preflight_is_asked_again_before_the_tag():
+    text = "\n".join(recipe("release"))
+    again = 'scripts/release-preflight.sh /proc/$$PPID)" = ok ]'
+    assert again in text
+    assert text.index(again) < text.index("git tag -a")
+
+
+def test_the_release_object_needs_the_tag_on_this_repository():
+    text = "\n".join(recipe("release"))
+    assert (
+        "gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag"
+        in text
+    )
+
+
+def test_a_failed_push_reads_origin_before_saying_what_happened():
+    text = "\n".join(recipe("release"))
+    read = "git ls-remote --tags origin refs/tags/v$(RELEASE_VERSION)"
+    assert text.index(read) < text.index("nothing was published")
 
 
 def test_the_other_tree_refusal_cannot_be_overridden_and_spares_this_tree():

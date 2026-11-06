@@ -775,6 +775,10 @@ gitleaks-commit-msg: ## secret + denylist scan of the commit MESSAGE being writt
 # ordered ritual (including the LuxPM mirror) is .claude/skills/release/SKILL.md.
 RELEASE_VERSION := $(shell git show HEAD:VERSION 2>/dev/null)
 RELEASE_HEAD := $(shell git rev-parse HEAD 2>/dev/null)
+RELEASE_REPO := luxardolabs/brother_ql
+
+# Builds the sdist and wheel of the tree mounted from $(1), a quoted path.
+override BUILD_ARTIFACTS = docker run --rm --user $(REPO_UID):$(REPO_GID) -v $(1):/repo -w /repo $(TAIL_IMAGE) sh -c 'pip install -q --root-user-action=ignore build >/dev/null && python -m build --outdir dist'
 
 # One shell per step, and `$(MAKE)` on lines of its own: make EXECUTES any line that
 # mentions $(MAKE) even under `make -n`, so a single-line recipe would really tag, push and
@@ -785,8 +789,9 @@ RELEASE_HEAD := $(shell git rev-parse HEAD 2>/dev/null)
 # make was really started. It is written out here, not in a variable, and an expansion error stops make
 # under `.IGNORE`, where a failing shell line would not. A first argument of exactly `-n` is a real dry
 # run, which no later word can undo and which is how the guards read this recipe, from a mirror that
-# need not hold the script, so it passes there. The commit judged is the commit tagged: the
-# last line refuses a tree that moved during the gate, and names that commit in the tag and the push.
+# need not hold the script, so it passes there. The commit judged is the commit shipped: the artifacts
+# are built from an export of it, so a file ignored in the checkout cannot reach them, and the last
+# line asks the preflight again before it tags and pushes that commit by name.
 release: ## Tag, push, build and publish the GitHub Release for the VERSION file's version
 	+@$(if $(filter-out /bin/sh -c,$(SHELL) $(.SHELLFLAGS)),$(error REFUSING: SHELL or .SHELLFLAGS was changed, so make $@ cannot read how it was started))$(if $(filter ok,$(shell /usr/bin/env -i HOME="$$HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh -c 'if [ "$$(tr "\n\0" "\001\n" <"$$1/cmdline" | sed -n 2p)" = -n ]; then echo ok; else /bin/sh scripts/release-preflight.sh "$$1"; fi' preflight /proc/$$PPID)),,$(error REFUSING: make $@ stopped: the reason is above))true
 	@set -e; \
@@ -796,22 +801,28 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 	fi; \
 	[ -z "$$(git ls-remote --tags origin refs/tags/v$(RELEASE_VERSION))" ] || { echo "release: tag v$(RELEASE_VERSION) already exists on origin"; exit 1; }
 	@$(MAKE) --no-print-directory check
-	@rm -rf dist
-	@$(MAKE) --no-print-directory build
+	@set -e; D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT INT TERM; \
+	git archive --format=tar $(RELEASE_HEAD) | tar -x -C "$$D"; \
+	$(call BUILD_ARTIFACTS,"$$D"); \
+	rm -rf dist; mv "$$D/dist" dist; \
+	[ "$$(ls dist | wc -l)" = 2 ] && [ -f dist/brother_ql-$(RELEASE_VERSION).tar.gz ] && ls dist/brother_ql-$(RELEASE_VERSION)-*.whl >/dev/null || { echo "release: dist/ is not the sdist and wheel of $(RELEASE_VERSION):"; ls dist; exit 1; }
 	@set -e; N=$$(mktemp); trap 'rm -f "$$N"' EXIT INT TERM; \
 	[ "$$(git rev-parse HEAD)" = "$(RELEASE_HEAD)" ] || { echo "release: HEAD moved during the gate, so that commit was not judged: run it again"; exit 1; }; \
-	[ -z "$$(git status --porcelain --untracked-files=all)" ] || { echo "release: the working tree changed during the gate: run it again"; exit 1; }; \
-	git show HEAD:CHANGELOG.md | awk -v h='## $(RELEASE_VERSION) ' 'index($$0, h) == 1 { f = 1; next } /^## / { f = 0 } f' > "$$N"; \
+	[ "$$(/usr/bin/env -i HOME="$$HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-preflight.sh /proc/$$PPID)" = ok ] || { echo "release: the tree or its settings changed during the gate: run it again"; exit 1; }; \
+	git show $(RELEASE_HEAD):CHANGELOG.md | awk -v h='## $(RELEASE_VERSION) ' 'index($$0, h) == 1 { f = 1; next } /^## / { f = 0 } f' > "$$N"; \
 	git tag -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD); \
-	git push --atomic origin $(RELEASE_HEAD):refs/heads/main v$(RELEASE_VERSION) || { git tag -d v$(RELEASE_VERSION); echo "release: the push failed, so nothing was published and the local tag was removed"; exit 1; }; \
-	gh release create v$(RELEASE_VERSION) --title "$(RELEASE_VERSION)" --notes-file "$$N" dist/* || { trap - EXIT INT TERM; echo "release: v$(RELEASE_VERSION) is pushed but has no Release. Finish it with: gh release create v$(RELEASE_VERSION) --title $(RELEASE_VERSION) --notes-file $$N dist/*"; exit 1; }; \
+	FINISH="gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title $(RELEASE_VERSION) --notes-file $$N dist/*"; \
+	git push --atomic origin $(RELEASE_HEAD):refs/heads/main v$(RELEASE_VERSION) || { \
+	  if ! R=$$(git ls-remote --tags origin refs/tags/v$(RELEASE_VERSION)); then trap - EXIT INT TERM; echo "release: the push failed and origin cannot be read, so whether v$(RELEASE_VERSION) arrived is unknown. The local tag is kept. Check with: git ls-remote --tags origin. If it arrived, finish with: $$FINISH"; exit 1; fi; \
+	  if [ -n "$$R" ]; then trap - EXIT INT TERM; echo "release: the push reported a failure, but v$(RELEASE_VERSION) is on origin with no Release. Finish with: $$FINISH"; exit 1; fi; \
+	  git tag -d v$(RELEASE_VERSION); echo "release: the push failed and v$(RELEASE_VERSION) is not on origin, so nothing was published and the local tag was removed"; exit 1; }; \
+	gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title "$(RELEASE_VERSION)" --notes-file "$$N" dist/* || { trap - EXIT INT TERM; echo "release: v$(RELEASE_VERSION) is pushed but has no Release. Finish with: $$FINISH"; exit 1; }; \
 	echo "released v$(RELEASE_VERSION) — now mirror it to LuxPM (see .claude/skills/release/SKILL.md)"
 
 ##@ Build
 
 build: ## Build the sdist + wheel in Docker (hatchling; version from VERSION)
-	docker run --rm --user $(REPO_UID):$(REPO_GID) -v $(CHECKOUT):/repo -w /repo $(TAIL_IMAGE) \
-	  sh -c 'pip install -q --root-user-action=ignore build >/dev/null && python -m build --outdir dist'
+	$(call BUILD_ARTIFACTS,$(CHECKOUT))
 
 ##@ Meta
 

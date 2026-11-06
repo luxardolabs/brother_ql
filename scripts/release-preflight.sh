@@ -38,22 +38,43 @@ esac
 # a tool in every recipe line, so all are refused except the few a login shell's profile exports, which
 # name no tool a recipe runs.
 [ -r "$proc/environ" ] || refuse "cannot read make's environment (Linux only)"
-steering=$(grep -zoE '^(MAKEFLAGS|GNUMAKEFLAGS|MAKEFILES|MAKEOVERRIDES|MAKE|MAKE_COMMAND|\.SHELLFLAGS|LUX_REGISTRY|LUXARCH_IMAGE|LUXLINT_IMAGE|LUXAUDIT_IMAGE|TAIL_IMAGE|GIT_IDENTITY_OK|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_GRAFT_FILE|GIT_NAMESPACE|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_CONFIG|GIT_CONFIG_[A-Z_]*|GH_REPO|GH_HOST|GH_ENTERPRISE_TOKEN|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|LD_PRELOAD|LD_LIBRARY_PATH|BASH_FUNC_[^=]*)=' "$proc/environ" | tr '\0' '\n' | grep -vE '^BASH_FUNC_(which|ml|module|scl|_module_raw)%%=$' | tr '\n' ' ')
+steering=$(grep -zoE '^(MAKEFLAGS|GNUMAKEFLAGS|MAKEFILES|MAKEOVERRIDES|MAKE|MAKE_COMMAND|\.SHELLFLAGS|LUX_REGISTRY|LUXARCH_IMAGE|LUXLINT_IMAGE|LUXAUDIT_IMAGE|TAIL_IMAGE|GIT_IDENTITY_OK|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_GRAFT_FILE|GIT_NAMESPACE|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_CONFIG|GIT_CONFIG_[A-Z_]*|GIT_REPLACE_REF_BASE|GIT_EXEC_PATH|GH_REPO|GH_HOST|GH_ENTERPRISE_TOKEN|GH_CONFIG_DIR|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|LD_PRELOAD|LD_LIBRARY_PATH|GLOBIGNORE|BASHOPTS|SHELLOPTS|BASH_ENV|ENV|BASH_FUNC_[^=]*)=' "$proc/environ" | tr '\0' '\n' | grep -vE '^BASH_FUNC_(which|ml|module|switchml|scl|_module_raw)%%=$' | tr '\n' ' ')
 [ -z "$steering" ] || refuse "the environment sets ${steering}which would steer it: unset them, and put settings in Makefile.local"
 
 # Makefiles the dirty check below cannot see. Makefile.local is gitignored, and it holds settings only.
 for other in GNUmakefile makefile; do
 	[ ! -e "$other" ] || refuse "$other is read instead of the Makefile: remove it"
 done
-if [ -e Makefile.local ]; then
-	unknown=$(grep -vE '^[[:space:]]*(#.*)?$' Makefile.local | grep -vE '^(LUX_REGISTRY|HEAVY_[A-Z_]+)[[:space:]]*(\?|:|::)?=[^$\\]*$' | head -n 1)
-	[ -z "$unknown" ] || refuse "Makefile.local may set only LUX_REGISTRY and HEAVY_*, and holds: $unknown"
-fi
+# Here in this directory, or make's include search could find another. Values are plain words, because
+# make pastes them into recipes as shell text.
+[ -f Makefile.local ] || refuse "there is no Makefile.local here: copy Makefile.local.example"
+unknown=$(grep -vE '^[[:space:]]*(#.*)?$' Makefile.local | grep -vE '^(LUX_REGISTRY|HEAVY_[A-Z_]+)[[:space:]]*(\?|:|::)?=[[:space:]]*[A-Za-z0-9._:/-]*[[:space:]]*$' | head -n 1)
+[ -z "$unknown" ] || refuse "Makefile.local may set only LUX_REGISTRY and HEAVY_*, to plain words, and holds: $unknown"
 
-# The commit to be judged and tagged.
-[ "$(git symbolic-ref -q --short HEAD)" = main ] || refuse "releases come from main"
-[ -z "$(git status --porcelain --untracked-files=all)" ] || refuse "the working tree is dirty: commit first"
-[ -z "$(git ls-files -v | grep '^[a-zS]')" ] || refuse "a tracked file is marked assume-unchanged or skip-worktree, which hides it from the dirty check"
+# The repository: every read must succeed, since an empty answer from a git that died reads as clean.
+[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ] || refuse "this is not a working tree git can read"
+[ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$(pwd -P)" ] || refuse "git's working tree is not this directory: check core.worktree"
+[ "$(git symbolic-ref -q HEAD)" = refs/heads/main ] || refuse "releases come from main"
+replaced=$(git for-each-ref refs/replace 2>/dev/null) || refuse "cannot read refs/replace"
+[ -z "$replaced" ] || refuse "refs/replace is set, so git would read other commits than the ones it pushes"
+fetch_url=$(git remote get-url origin 2>/dev/null) || refuse "there is no origin"
+push_url=$(git remote get-url --push origin 2>/dev/null) || refuse "there is no push URL for origin"
+[ "$fetch_url" = "$push_url" ] || refuse "origin pushes somewhere other than it fetches from"
+
+status=$(git -c core.fsmonitor=false status --porcelain --untracked-files=all 2>/dev/null) || refuse "git status failed: check the repository's config"
+[ -z "$status" ] || refuse "the working tree is dirty: commit first"
+
+# The bytes on disk are the bytes at HEAD. git status trusts its index and its config, which can both
+# hide a change, and the gate judges what is on disk.
+tree=$(git ls-tree -r HEAD 2>/dev/null) || refuse "cannot read the tree at HEAD"
+[ -n "$tree" ] || refuse "the tree at HEAD is empty"
+different=$(printf '%s\n' "$tree" | while read -r mode type object path; do
+	if [ "$type" != blob ] || [ "$mode" = 120000 ] || [ "$(git hash-object --no-filters "$path" 2>/dev/null)" != "$object" ]; then
+		printf '%s\n' "$path"
+		break
+	fi
+done)
+[ -z "$different" ] || refuse "$different on disk is not a plain file holding what HEAD holds"
 
 version=$(git show HEAD:VERSION 2>/dev/null)
 printf '%s\n' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || refuse "VERSION at HEAD is not X.Y.Z: '$version'"
