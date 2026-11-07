@@ -44,7 +44,7 @@ LUX_REGISTRY ?=
 # trails the published :latest (it is the first step of `make check`), and
 # `make guard-upgrade` bumps every pin and prints what newly bites. Keep the `:=` form —
 # guard-upgrade's sed rewrites exactly these three lines.
-LUXARCH_VERSION  := 0.350.0
+LUXARCH_VERSION  := 0.351.0
 LUXLINT_VERSION  := 0.75.0
 LUXAUDIT_VERSION := 0.17.0
 
@@ -780,6 +780,10 @@ RELEASE_REPO := luxardolabs/brother_ql
 override RELEASE_SIGNALS = INT TERM HUP QUIT USR1 USR2 ALRM PIPE XCPU VTALRM
 # Every line that talks to GitHub or makes the tag runs with only the environment this script names.
 override RELEASE_RUN = /bin/sh scripts/release-run.sh
+# git, reaching GitHub: an empty value clears every helper config set, so only gh's token is offered.
+override RELEASE_GIT = $(RELEASE_RUN) git -c credential.helper= -c 'credential.helper=!gh auth git-credential'
+# Asked at the start and again before the tag, since gh would send its token to that socket.
+override RELEASE_GH_SOCKET = [ -z "$$($(RELEASE_RUN) gh config get http_unix_socket 2>/dev/null)" ] || { echo "release: gh's http_unix_socket is set, which sends gh's token to that socket: unset it"; exit 1; }
 
 # Builds the sdist and wheel of the tree mounted from $(1), a quoted path.
 override BUILD_ARTIFACTS = docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOME=/tmp -v $(1):/repo -w /repo $(TAIL_IMAGE) sh -c 'pip install -q --root-user-action=ignore build >/dev/null && python -m build --outdir dist'
@@ -805,13 +809,13 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 	+@$(if $(filter-out /bin/sh -c,$(SHELL) $(.SHELLFLAGS)),$(error REFUSING: SHELL or .SHELLFLAGS was changed, so make $@ cannot read how it was started))$(if $(filter ok,$(shell /usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh -c 'if [ "$$(tr "\n\0" "\001\n" <"$$1/cmdline" | sed -n 2p)" = -n ]; then echo ok; else /bin/sh scripts/release-preflight.sh "$$1"; fi' preflight /proc/$$PPID)),,$(error REFUSING: make $@ stopped: scripts/release-preflight.sh did not answer ok, and any reason it gave is above))true
 	@set -e; \
 	command -v gh >/dev/null || { echo "release: gh is not installed, and the Release is the last step"; exit 1; }; \
-	[ -z "$$($(RELEASE_RUN) gh config get http_unix_socket 2>/dev/null)" ] || { echo "release: gh's http_unix_socket is set, which sends gh's token to that socket: unset it"; exit 1; }; \
+	$(RELEASE_GH_SOCKET); \
 	$(RELEASE_RUN) gh auth status >/dev/null 2>&1 || { echo "release: gh is not signed in (gh auth login), and the Release is the last step"; exit 1; }; \
-	$(RELEASE_RUN) git fetch -q origin; \
+	$(RELEASE_GIT) fetch -q origin; \
 	if git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then \
 	  git merge-base --is-ancestor origin/main HEAD || { echo "release: origin/main has commits this checkout does not: pull first"; exit 1; }; \
 	fi; \
-	[ -z "$$($(RELEASE_RUN) git ls-remote --tags origin refs/tags/v$(RELEASE_VERSION))" ] || { echo "release: tag v$(RELEASE_VERSION) already exists on origin"; exit 1; }
+	[ -z "$$($(RELEASE_GIT) ls-remote --tags origin refs/tags/v$(RELEASE_VERSION))" ] || { echo "release: tag v$(RELEASE_VERSION) already exists on origin"; exit 1; }
 	@case '$(filter-out -%,$(firstword $(MAKEFLAGS)))' in *n*) exec $(MAKE) --no-print-directory check;; esac; \
 	set -e; D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT; trap 'rm -rf "$$D"; exit 130' $(RELEASE_SIGNALS); \
 	/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-clone.sh $(RELEASE_HEAD) "$$D"; \
@@ -825,12 +829,13 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 	@set -e; N=$$(mktemp); trap 'rm -f "$$N"' EXIT; trap 'rm -f "$$N"; exit 130' $(RELEASE_SIGNALS); \
 	[ "$$(git rev-parse HEAD)" = "$(RELEASE_HEAD)" ] || { echo "release: HEAD moved during the gate, so that commit was not judged: run it again"; exit 1; }; \
 	[ "$$(/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-preflight.sh /proc/$$PPID)" = ok ] || { echo "release: the tree or its settings changed during the gate: run it again"; exit 1; }; \
+	$(RELEASE_GH_SOCKET); \
 	git show $(RELEASE_HEAD):CHANGELOG.md | awk -v h='## $(RELEASE_VERSION) ' 'index($$0, h) == 1 { f = 1; next } /^## / { f = 0 } f' > "$$N"; \
-	FINISH="gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title $(RELEASE_VERSION) --notes-file '$$N' dist/*"; \
-	trap - EXIT; trap 'echo "release: interrupted after tagging. Check with: git ls-remote --tags origin. If v$(RELEASE_VERSION) arrived, finish with: $$FINISH. If not: git tag -d v$(RELEASE_VERSION)"; exit 130' $(RELEASE_SIGNALS); \
+	FINISH="$(RELEASE_RUN) gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title $(RELEASE_VERSION) --notes-file '$$N' dist/*"; \
+	trap - EXIT; trap 'echo "release: interrupted after tagging. Check with: $(RELEASE_RUN) git ls-remote --tags origin. If v$(RELEASE_VERSION) arrived, finish with: $$FINISH. If not: git tag -d v$(RELEASE_VERSION)"; exit 130' $(RELEASE_SIGNALS); \
 	$(RELEASE_RUN) git tag --no-sign --cleanup=verbatim -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD) || { rm -f "$$N"; exit 1; }; \
-	$(RELEASE_RUN) git -c push.followTags=false push --atomic origin $(RELEASE_HEAD):refs/heads/main v$(RELEASE_VERSION) || { \
-	  if ! R=$$($(RELEASE_RUN) git ls-remote --tags origin refs/tags/v$(RELEASE_VERSION) 'refs/tags/v$(RELEASE_VERSION)^{}'); then echo "release: the push failed and origin cannot be read, so whether v$(RELEASE_VERSION) arrived is unknown. The local tag is kept. Check with: git ls-remote --tags origin. If it arrived, finish with: $$FINISH. If not: git tag -d v$(RELEASE_VERSION)"; exit 1; fi; \
+	$(RELEASE_GIT) -c push.followTags=false push --atomic origin $(RELEASE_HEAD):refs/heads/main v$(RELEASE_VERSION) || { \
+	  if ! R=$$($(RELEASE_GIT) ls-remote --tags origin refs/tags/v$(RELEASE_VERSION) 'refs/tags/v$(RELEASE_VERSION)^{}'); then echo "release: the push failed and origin cannot be read, so whether v$(RELEASE_VERSION) arrived is unknown. The local tag is kept. Check with: $(RELEASE_RUN) git ls-remote --tags origin. If it arrived, finish with: $$FINISH. If not: git tag -d v$(RELEASE_VERSION)"; exit 1; fi; \
 	  if [ -z "$$R" ]; then git tag -d v$(RELEASE_VERSION); rm -f "$$N"; echo "release: the push failed and v$(RELEASE_VERSION) is not on origin, so nothing was published and the local tag was removed"; exit 1; fi; \
 	  P=$$(printf '%s\n' "$$R" | tail -n 1 | cut -f1); \
 	  if [ "$$P" = "$(RELEASE_HEAD)" ]; then echo "release: the push reported a failure, but v$(RELEASE_VERSION) is on origin at the judged commit, and this run made no Release. Unless someone else has, finish with: $$FINISH"; else echo "release: v$(RELEASE_VERSION) on origin names $$P, not the judged $(RELEASE_HEAD), so someone else tagged it. Nothing of this run was published on that tag. The local tag is kept: compare them, then: git tag -d v$(RELEASE_VERSION)"; fi; \

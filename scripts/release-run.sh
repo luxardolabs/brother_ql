@@ -4,10 +4,10 @@
 # Usage: release-run.sh <command> [argument...]
 #
 # A name nothing here lists does not reach git, gh or the pre-push hook they start. What is kept finds the
-# tools and their config, reaches a keyring or an ssh agent, gives gh its token, and leaves a proxy working,
-# which sees nothing while TLS still has to name github.com. A name that is not set stays not set.
-for name in HOME XDG_CONFIG_HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS PATH TMPDIR LANG TERM \
-	SSH_AUTH_SOCK GH_TOKEN GITHUB_TOKEN \
+# tools and their config, reaches a keyring, gives gh its token, and leaves a proxy working, which sees
+# nothing while TLS still has to name github.com.
+for name in HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR \
+	DBUS_SESSION_BUS_ADDRESS PATH TMPDIR LANG TERM GH_TOKEN GITHUB_TOKEN \
 	HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy NO_PROXY no_proxy; do
 	eval "given=\${$name+x}"
 	[ -z "$given" ] || eval "set -- \"\$name=\$$name\" \"\$@\""

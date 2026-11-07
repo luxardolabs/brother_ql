@@ -113,7 +113,7 @@ def test_the_release_tags_the_commit_it_judged_from_what_head_holds():
         in text
     )
     assert (
-        "git -c push.followTags=false push --atomic origin $(RELEASE_HEAD):refs/heads/main"
+        "-c push.followTags=false push --atomic origin $(RELEASE_HEAD):refs/heads/main"
         in text
     )
 
@@ -141,17 +141,24 @@ def test_every_line_that_talks_to_github_or_tags_runs_under_the_allowance():
     )
     text = "\n".join(recipe("release"))
     for command in (
-        "gh config get http_unix_socket",
         "gh auth status",
-        "git fetch -q origin",
         "git tag --no-sign",
-        "git -c push.followTags=false push",
         'gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title "',
     ):
         assert f"$(RELEASE_RUN) {command}" in text, command
-    # Both reads of origin, leaving the words of the messages that tell a person what to run.
-    assert text.count("$(RELEASE_RUN) git ls-remote --tags origin refs/") == 2
-    assert "Check with: git ls-remote" in text
+    # A helper in any config would be handed the token: the empty value clears them all first.
+    assert definition("RELEASE_GIT") == (
+        "override RELEASE_GIT = $(RELEASE_RUN) git -c credential.helper= "
+        "-c 'credential.helper=!gh auth git-credential'"
+    )
+    assert "$(RELEASE_GIT) fetch -q origin" in text
+    assert "$(RELEASE_GIT) -c push.followTags=false push" in text
+    assert text.count("$(RELEASE_GIT) ls-remote --tags origin refs/") == 2
+    # A person pasting these gets the same environment.
+    assert text.count("Check with: $(RELEASE_RUN) git ls-remote") == 2
+    assert 'FINISH="$(RELEASE_RUN) gh release create' in text
+    for bare in ("Check with: git ", 'FINISH="gh '):
+        assert bare not in text
 
 
 def test_the_artifacts_come_from_an_export_of_the_judged_commit():
@@ -180,7 +187,7 @@ def test_the_release_object_needs_the_tag_on_this_repository():
 
 def test_a_failed_push_reads_origin_before_saying_what_happened():
     text = "\n".join(recipe("release"))
-    read = "git ls-remote --tags origin refs/tags/v$(RELEASE_VERSION)"
+    read = "$(RELEASE_GIT) ls-remote --tags origin refs/tags/v$(RELEASE_VERSION)"
     assert text.index(read) < text.index("nothing was published")
     # A tag on origin is only ours if it names the judged commit.
     assert '[ "$$P" = "$(RELEASE_HEAD)" ]' in text
@@ -190,8 +197,11 @@ def test_gh_is_checked_before_the_gate_so_a_release_cannot_stop_half_way():
     text = "\n".join(recipe("release"))
     gate = text.index("--no-print-directory check")
     assert text.index("command -v gh") < gate
-    # The token would go to the socket at the first thing gh does.
-    assert text.index("gh config get http_unix_socket") < text.index("gh auth status")
+    # The token would go to the socket at the first thing gh does, and the gate takes minutes.
+    assert "gh config get http_unix_socket" in definition("RELEASE_GH_SOCKET")
+    assert text.index("$(RELEASE_GH_SOCKET)") < text.index("gh auth status")
+    assert text.count("$(RELEASE_GH_SOCKET)") == 2
+    assert text.rindex("$(RELEASE_GH_SOCKET)") < text.index("git tag --no-sign")
     assert text.index("gh auth status") < gate
 
 

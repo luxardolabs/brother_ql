@@ -26,6 +26,7 @@ case "$*" in
 "remote get-url --all origin" | "remote get-url --push --all origin") echo https://github.com/luxardolabs/brother_ql.git ;;
 "config --get "*) ;;
 "config --get-urlmatch http "*) exit 1 ;;
+"config --name-only --get-regexp ^hook\\\\.") exit 1 ;;
 "rev-parse --path-format=absolute --git-dir" | "rev-parse --path-format=absolute --git-common-dir") echo /r/.git ;;
 "-c core.fsmonitor=false status --porcelain --untracked-files=all") ;;
 "var GIT_COMMITTER_IDENT") echo 'luxardolabs <214140984+luxardolabs@users.noreply.github.com> 1700000000 +0000' ;;
@@ -161,7 +162,21 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
             '"rev-parse --is-inside-work-tree") echo "fatal: detected dubious ownership" >&2; exit 128 ;;',
             "dubious ownership",
         ),
-        ('"config --get core.sshCommand") echo evil ;;', "core.sshCommand"),
+        # A hook set in config runs inside the push and holds the token.
+        (
+            '"config --name-only --get-regexp ^hook\\\\.") echo hook.x.event ;;',
+            "hook.x is set",
+        ),
+        ('"config --name-only --get-regexp ^hook\\\\.") exit 128 ;;', "git's config"),
+        # ~/.ssh/config can send ssh to another host or run a command, so https is all a release uses.
+        (
+            '"remote get-url --push --all origin") echo git@github.com:luxardolabs/brother_ql.git ;;',
+            "push URL",
+        ),
+        (
+            '"remote get-url --all origin") echo ssh://git@github.com/luxardolabs/brother_ql ;;',
+            "fetch URL",
+        ),
         ('"config --get remote.origin.receivepack") echo evil ;;', "receivepack"),
         ('"config --get core.gitProxy") echo evil ;;', "core.gitProxy"),
         # A machine in the middle needs TLS to trust it, in any spelling of the key.
@@ -232,11 +247,10 @@ def test_makefile_local_may_hold_plain_settings_only(tmp_path, local):
 @pytest.mark.parametrize(
     "arm",
     [
-        # An ssh push URL beside an https fetch URL, as a global pushInsteadOf gives.
-        '"remote get-url --push --all origin") echo git@github.com:luxardolabs/brother_ql.git ;;\n',
-        '"remote get-url --all origin") echo ssh://git@github.com/luxardolabs/brother_ql ;;\n',
+        '"remote get-url --push --all origin") echo https://github.com/luxardolabs/brother_ql ;;\n',
+        '"remote get-url --all origin") echo https://github.com/luxardolabs/brother_ql ;;\n',
         # Two spellings of this repository, both pushed to.
-        "\"remote get-url --push --all origin\") printf 'https://github.com/luxardolabs/brother_ql\\ngit@github.com:luxardolabs/brother_ql\\n' ;;\n",
+        "\"remote get-url --push --all origin\") printf 'https://github.com/luxardolabs/brother_ql\\nhttps://github.com/luxardolabs/brother_ql.git\\n' ;;\n",
     ],
 )
 def test_each_spelling_of_this_repository_passes(tmp_path, arm):
@@ -279,15 +293,6 @@ def test_a_refusal_does_not_print_a_token_in_the_url(tmp_path, url):
 )
 def test_git_settings_that_leave_tls_trust_alone_pass(tmp_path, line):
     arm = f'"config --get-urlmatch http "*) {line} ;;\n'
-    assert preflight(tmp_path, ["make", "release"], git_answers=arm) == ("ok", "")
-
-
-def test_an_ssh_url_is_not_asked_about_tls(tmp_path):
-    ssh = "git@github.com:luxardolabs/brother_ql.git"
-    arm = (
-        f'"remote get-url --all origin" | "remote get-url --push --all origin") echo {ssh} ;;\n'
-        '"config --get-urlmatch http "*) exit 99 ;;\n'
-    )
     assert preflight(tmp_path, ["make", "release"], git_answers=arm) == ("ok", "")
 
 
@@ -336,7 +341,7 @@ def test_a_name_the_allowance_does_not_list_does_not_reach_the_command(name):
         "XDG_RUNTIME_DIR",
         "DBUS_SESSION_BUS_ADDRESS",
         "TMPDIR",
-        "SSH_AUTH_SOCK",
+        "XDG_CACHE_HOME",
         "GH_TOKEN",
         "GITHUB_TOKEN",
         "HTTPS_PROXY",

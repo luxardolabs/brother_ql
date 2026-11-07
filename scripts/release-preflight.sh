@@ -74,12 +74,11 @@ fetch_urls=$(git remote get-url --all origin 2>/dev/null) || refuse "there is no
 push_urls=$(git remote get-url --push --all origin 2>/dev/null) || refuse "there is no push URL for origin"
 [ -n "$fetch_urls" ] || refuse "there is no origin"
 [ -n "$push_urls" ] || refuse "there is no push URL for origin"
-# Each URL must name this repository. Fetch and push may spell it differently, as a pushInsteadOf does.
+# Each URL must name this repository over https. ssh is left out because ~/.ssh/config can send it to
+# another host or run a command, and a TLS certificate has no such setting on this machine's side.
 names_this_repository() {
 	case "$1" in
 	https://github.com/luxardolabs/brother_ql | https://github.com/luxardolabs/brother_ql.git) ;;
-	git@github.com:luxardolabs/brother_ql | git@github.com:luxardolabs/brother_ql.git) ;;
-	ssh://git@github.com/luxardolabs/brother_ql | ssh://git@github.com/luxardolabs/brother_ql.git) ;;
 	*) return 1 ;;
 	esac
 }
@@ -87,10 +86,6 @@ names_this_repository() {
 # in the middle would get the refs and the token. Asked of the URL itself, as the push asks, so a setting
 # scoped to another host does not count, and one scoped to this host or this repository does.
 trusts_as_usual() {
-	case "$1" in
-	https://*) ;;
-	*) return 0 ;;
-	esac
 	http=$(git config --get-urlmatch http "$1" 2>/dev/null)
 	[ $? -le 1 ] || refuse "cannot read git's config"
 	trust=$(printf '%s\n' "$http" | grep -E '^http\.(sslverify|sslcainfo|sslcapath) ' | grep -vE '^http\.sslverify (true|yes|on|1)$' | head -n 1 | cut -d' ' -f1)
@@ -102,16 +97,20 @@ IFS='
 '
 set -f
 for url in $fetch_urls; do
-	names_this_repository "$url" || refuse "origin's fetch URL does not name luxardolabs/brother_ql, where the Release goes: see git remote -v"
+	names_this_repository "$url" || refuse "origin's fetch URL is not https://github.com/luxardolabs/brother_ql, where the Release goes: see git remote -v"
 	trusts_as_usual "$url"
 done
 for url in $push_urls; do
-	names_this_repository "$url" || refuse "origin's push URL does not name luxardolabs/brother_ql, where the Release goes: see git remote -v"
+	names_this_repository "$url" || refuse "origin's push URL is not https://github.com/luxardolabs/brother_ql, where the Release goes: see git remote -v"
 	trusts_as_usual "$url"
 done
 set +f
 IFS=$words
-for key in core.sshCommand core.gitProxy remote.origin.receivepack remote.origin.uploadpack remote.origin.vcs; do
+# A hook set in config runs inside the push beside the committed ones, and holds the token.
+hooks=$(git config --name-only --get-regexp '^hook\.' 2>/dev/null)
+[ $? -le 1 ] || refuse "cannot read git's config"
+[ -z "$hooks" ] || refuse "$(printf '%s\n' "$hooks" | head -n 1 | cut -d. -f1-2) is set, which runs a hook the commit does not hold: unset it"
+for key in core.gitProxy remote.origin.receivepack remote.origin.uploadpack remote.origin.vcs; do
 	[ -z "$(git config --get "$key" 2>/dev/null)" ] || refuse "$key is set, which changes where or how the release is pushed"
 done
 
