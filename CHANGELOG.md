@@ -4,6 +4,29 @@ All notable changes to brother_ql. This is a **library**, so it is [SemVer](http
 
 Each released version is anchored by an annotated `v<VERSION>` git tag and a matching GitHub Release carrying that version's notes.
 
+## 2.0.3 — 2026-11-07
+
+Four print-path bugs fixed, found by reading the library in full and proven against the raster bytes a printer receives. The release tooling behind this repo was also rebuilt; none of that ships in the package.
+
+### Fixes
+
+- **600 DPI on endless labels works** (BROTHERQL-55). Every `convert(..., dpi_600=True)` on an endless label raised `Wrong pixel width`, because the target width was doubled twice.
+- **600 DPI on die-cut labels prints full width** (BROTHERQL-55). A label-sized image was halved to half the label's width. It now takes an image drawn at 600 DPI, twice the printable width and height.
+- **1-bit images no longer print black margins** (BROTHERQL-55). On a label narrower than the print head (29x90 on a 720-dot head, for example), a mode `"1"` image was padded with black.
+- **P-touch models get P-touch rows however their name is spelled** (BROTHERQL-55). `BrotherQLRaster("pt-p750w")` sent QL row commands; `BrotherQLRaster.model` now holds the canonical name.
+
+### Infra / Ops
+
+- **`make release` judges exactly the commit it ships** (BROTHERQL-41, 45, 48, 52, 53, 54): a preflight refuses arguments, a dirty or linked checkout, a personal tag identity and changed TLS trust; the gate runs in a fresh clone of the commit; the artifacts are built from a raw export, checked against their sums, and uploaded from a private copy; every line that talks to GitHub runs with a named environment and only gh's token; gh must be signed in as `luxardolabs` and new enough for `--verify-tag`.
+- Fleet guards at luxarch 0.353.0, luxlint 0.75.0 and luxaudit 0.17.0, with the gate, privacy, guard-upgrade and adversarial blocks re-emitted.
+
+### Notes
+
+- **Upgrading from 2.0.2:** if you call `convert(..., dpi_600=True)` for a die-cut label, pass an image twice the printable width and height; a label-sized one is now refused rather than printed at half width. Nothing else is needed.
+- Multi-image jobs were checked on a QL-810W: the paging bytes print identically to Brother's documented form (BROTHERQL-56), so they are unchanged.
+- Guard escalations fixed upstream: BROTHERQL-28 to -35, -37, -38, -40 (luxarch 0.349.0), -31 (luxlint 0.75.0), -46 (luxarch 0.352.0). Open: BROTHERQL-36, -49, -51.
+- `make check` is green at this release: lint 20/0 (3 N/A), mypy 0, 368 tests, coverage 91.46%, arch 43/0 (35 N/A), audit 3 packages 0 vulnerable, gitleaks clean. No `## Known reds`.
+
 ## 2.0.2 — 2026-11-06
 
 **Upgrade to Pillow 13 before installing this release.** It requires `Pillow>=13.0`. The library API and code are unchanged: `git diff v2.0.1..v2.0.2 -- src` is empty.
