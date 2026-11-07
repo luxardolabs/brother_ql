@@ -221,6 +221,10 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
         ('"ls-files --others -- hooks") exit 128 ;;', "hooks/"),
         # Each runs code inside the git that holds the token.
         ('"config --get core.fsmonitor") echo /tmp/planted ;;', "core.fsmonitor"),
+        # On a git before 2.36 these are hook commands, and `yes` never ends.
+        ('"config --get core.fsmonitor") echo yes ;;', "core.fsmonitor"),
+        ('"config --get core.fsmonitor") echo on ;;', "core.fsmonitor"),
+        ('"config --get core.fsmonitor") echo 1 ;;', "core.fsmonitor"),
         (
             '"config --get core.alternateRefsCommand") echo /tmp/planted ;;',
             "core.alternateRefsCommand",
@@ -424,11 +428,9 @@ def test_a_version_refusal_does_not_print_the_file(tmp_path):
     assert "s3cret" not in said
 
 
-@pytest.mark.parametrize(
-    "value", ["false", "FALSE", "no", "off", "0", "true", "TRUE", "yes", "on", "1"]
-)
-def test_core_fsmonitor_as_a_boolean_passes(tmp_path, value):
-    # true is git's own daemon, as scalar sets it, and false turns it off: neither runs a hook.
+@pytest.mark.parametrize("value", ["false", "FALSE", "no", "off", "0", "true", "TRUE"])
+def test_core_fsmonitor_off_or_true_passes(tmp_path, value):
+    # true is git's own daemon from 2.36, as scalar sets it, and /usr/bin/true before that.
     arm = f'"config --get core.fsmonitor") echo {value} ;;\n'
     assert preflight(tmp_path, ["make", "release"], git_answers=arm) == ("ok", "")
 
