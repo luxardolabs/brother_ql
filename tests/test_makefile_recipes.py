@@ -148,11 +148,13 @@ def test_every_line_that_talks_to_github_or_tags_runs_under_the_allowance():
         "override RELEASE_RUN = /bin/sh scripts/release-run.sh"
     )
     text = "\n".join(recipe("release"))
-    for command in (
-        "git tag --no-sign",
-        'gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title "',
-    ):
-        assert f"$(RELEASE_RUN) {command}" in text, command
+    assert "$(RELEASE_RUN) git tag --no-sign" in text
+    # gh runs through scripts/release-gh.sh, which runs it under the same allowance.
+    assert (
+        definition("RELEASE_GH")
+        == "override RELEASE_GH = /bin/sh scripts/release-gh.sh"
+    )
+    assert "gh release create" not in text
     # A helper in any config would be handed the token: the empty value clears them all first.
     assert definition("RELEASE_GIT") == (
         "override RELEASE_GIT = $(RELEASE_RUN) git --no-pager -c credential.helper= "
@@ -163,7 +165,6 @@ def test_every_line_that_talks_to_github_or_tags_runs_under_the_allowance():
     assert text.count("$(RELEASE_GIT) ls-remote --tags origin refs/") == 2
     # A person pasting these gets the same environment.
     assert text.count("Check with: $(RELEASE_RUN) git ls-remote") == 2
-    assert 'FINISH="$(RELEASE_RUN) gh release create' in text
     for bare in ("Check with: git ", 'FINISH="gh '):
         assert bare not in text
 
@@ -187,9 +188,13 @@ def test_the_preflight_is_asked_again_before_the_tag():
 def test_the_release_object_needs_the_tag_on_this_repository():
     text = "\n".join(recipe("release"))
     assert (
-        "gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag"
+        '$(RELEASE_GH) publish $(RELEASE_REPO) $(RELEASE_VERSION) "$$N" "$$U" ||'
         in text
     )
+    script = (
+        Path(__file__).resolve().parent.parent / "scripts" / "release-gh.sh"
+    ).read_text()
+    assert 'run gh release create "v$version" --repo "$repo" --verify-tag' in script
 
 
 def test_a_failed_push_reads_origin_before_saying_what_happened():
@@ -200,41 +205,19 @@ def test_a_failed_push_reads_origin_before_saying_what_happened():
     assert '[ "$$P" = "$(RELEASE_HEAD)" ]' in text
 
 
-def joined(name):
-    """A make variable's whole definition, its continuation lines joined."""
-    lines = MAKEFILE.splitlines()
-    start = next(
-        i for i, line in enumerate(lines) if line.startswith(f"override {name} =")
-    )
-    text = ""
-    for line in lines[start:]:
-        text += line.strip()
-        if not text.endswith("\\"):
-            return text
-        text = text[:-1] + " "
-    return text
-
-
-def test_gh_is_checked_before_the_gate_and_again_before_the_tag():
+def test_gh_is_checked_before_the_gate_again_before_the_tag_and_at_the_upload():
     text = "\n".join(recipe("release"))
     gate = text.index("--no-print-directory check")
     assert text.index("command -v gh") < gate
-    ready = joined("RELEASE_GH_READY")
-    # The socket would take the token at the first thing gh does, so it is asked first.
-    order = [
-        "$(RELEASE_RUN) gh config get http_unix_socket",
-        # Only github.com's active account, so another host or account gh holds does not count.
-        "$(RELEASE_RUN) gh auth status --hostname github.com --active",
-        # The account gh is signed in as pushes and publishes, asked of github.com itself.
-        '[ "$$($(RELEASE_RUN) gh api --hostname github.com user --jq .login 2>/dev/null)" = luxardolabs ]',
-    ]
-    assert [ready.index(step) for step in order] == sorted(
-        ready.index(step) for step in order
-    )
+    assert text.index("$(RELEASE_GH) ready") < gate
     # The gate takes minutes, so it is asked again before the tag.
-    assert text.index("$(RELEASE_GH_READY)") < gate
-    assert text.count("$(RELEASE_GH_READY)") == 2
-    assert text.rindex("$(RELEASE_GH_READY)") < text.index("git tag --no-sign")
+    assert text.count("$(RELEASE_GH) ready") == 2
+    assert text.rindex("$(RELEASE_GH) ready") < text.index("git tag --no-sign")
+    # The command printed for a person to finish by hand goes through the same checks.
+    assert (
+        "FINISH=\"$(RELEASE_GH) publish $(RELEASE_REPO) $(RELEASE_VERSION) '$$N' '$$U'\""
+        in text
+    )
 
 
 def test_what_is_uploaded_is_a_checked_private_copy_of_the_build():
@@ -247,9 +230,19 @@ def test_what_is_uploaded_is_a_checked_private_copy_of_the_build():
     assert text.index(record) < copy < check < text.index("git tag --no-sign")
     assert "U=$$(mktemp -d)" in text
     # The upload and the command printed for a person both take the checked copy, never dist/.
-    assert '--notes-file "$$N" "$$U"/* ||' in text
-    assert "--notes-file '$$N' '$$U'/*\"" in text
+    assert 'publish $(RELEASE_REPO) $(RELEASE_VERSION) "$$N" "$$U" ||' in text
+    assert "publish $(RELEASE_REPO) $(RELEASE_VERSION) '$$N' '$$U'\"" in text
     assert "dist/*" not in text
+    # Every path that prints no way to finish removes them, and one that says to delete the tag says
+    # to remove them too.
+    assert (
+        text.count('If not: git tag -d v$(RELEASE_VERSION); rm -rf \\"$$N\\" \\"$$U\\"')
+        == 2
+    )
+    assert (
+        'else rm -rf "$$N" "$$U"; echo "release: v$(RELEASE_VERSION) on origin names'
+        in text
+    )
     # From the tag on, the copy stays for the command that finishes the Release.
     assert text.index("trap - EXIT;") < text.index("git tag --no-sign")
 

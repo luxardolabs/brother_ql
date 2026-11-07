@@ -371,6 +371,8 @@ def test_git_settings_that_leave_tls_trust_alone_pass(tmp_path, line):
         'machine "github.com" login a password s3cret\n',
         "# for the proxy\nmachine github.com login a password s3cret\n",
         "macdef init\ncd /\n\nmachine github.com login a password s3cret\n",
+        # A quoted value holding spaces and a keyword is one word to curl.
+        'machine other.invalid login a password "pa ss login"\nmachine github.com login b password s3cret\n',
     ],
 )
 def test_a_netrc_entry_curl_would_use_for_github_is_refused(tmp_path, netrc):
@@ -459,6 +461,133 @@ def test_a_refusal_does_not_print_the_identity_it_refuses(tmp_path):
     assert "A Person" not in said
 
 
+GH = SCRIPT.parent / "release-gh.sh"
+
+# gh signed in to github.com as luxardolabs, with no socket set; every call is logged. The log's path is
+# written in, because the allowance gh runs under drops any variable that could name it.
+STAND_IN_GH = """#!/bin/sh
+printf '%s\\n' "$*" >>CALLS_FILE
+case "$*" in
+"config get http_unix_socket") ;;
+"api --hostname github.com user --jq .login") echo luxardolabs ;;
+"release create "*) ;;
+*) echo "unexpected: gh $*" >&2; exit 99 ;;
+esac
+"""
+
+
+def release_gh(tmp_path, *arguments, gh_answers="", sums=None):
+    """Run release-gh.sh with a stand-in gh and git, and return (result, gh's calls)."""
+    tools = tmp_path / "tools"
+    tools.mkdir(exist_ok=True)
+    (tools / "gh").write_text(
+        STAND_IN_GH.replace('case "$*" in\n', f'case "$*" in\n{gh_answers}').replace(
+            "CALLS_FILE", shlex.quote(str(tmp_path / "calls"))
+        )
+    )
+    (tools / "gh").chmod(0o755)
+    sums_file = tmp_path / "release-dist.sha256"
+    (tools / "git").write_text(f"#!/bin/sh\necho {sums_file}\n")
+    (tools / "git").chmod(0o755)
+    built = tmp_path / "built"
+    built.mkdir(exist_ok=True)
+    (built / "brother_ql-1.0.0.tar.gz").write_bytes(b"sdist")
+    (built / "brother_ql-1.0.0-py3-none-any.whl").write_bytes(b"wheel")
+    listed = subprocess.run(
+        ["sha256sum", "brother_ql-1.0.0.tar.gz", "brother_ql-1.0.0-py3-none-any.whl"],
+        cwd=built,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    sums_file.write_text(listed if sums is None else sums)
+    calls = tmp_path / "calls"
+    calls.touch()
+    done = subprocess.run(
+        ["/bin/sh", str(GH), *arguments],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env={
+            "PATH": f"{tools}:/usr/bin:/bin",
+            "CALLS": str(calls),
+            "HOME": str(tmp_path),
+        },
+    )
+    return done, calls.read_text()
+
+
+def test_gh_ready_when_signed_in_as_luxardolabs(tmp_path):
+    done, calls = release_gh(tmp_path, "ready")
+    assert done.returncode == 0, done.stderr
+    # The socket is asked first: it would take the token at gh's first request.
+    assert calls.splitlines() == [
+        "config get http_unix_socket",
+        "api --hostname github.com user --jq .login",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("answer", "reason"),
+    [
+        ('"config get http_unix_socket") echo /tmp/gh.sock ;;', "http_unix_socket"),
+        # Another account, signed out, or an older gh that errors: the account is what is asked.
+        (
+            '"api --hostname github.com user --jq .login") echo someone-else ;;',
+            "as luxardolabs",
+        ),
+        ('"api --hostname github.com user --jq .login") exit 1 ;;', "as luxardolabs"),
+    ],
+)
+def test_gh_not_ready_is_refused(tmp_path, answer, reason):
+    done, _ = release_gh(tmp_path, "ready", gh_answers=answer + "\n")
+    assert done.returncode != 0
+    assert reason in done.stderr
+
+
+def test_publish_uploads_the_checked_artifacts_to_the_tag(tmp_path):
+    notes = tmp_path / "notes"
+    notes.write_text("notes")
+    done, calls = release_gh(
+        tmp_path,
+        "publish",
+        "luxardolabs/brother_ql",
+        "1.0.0",
+        str(notes),
+        str(tmp_path / "built"),
+    )
+    assert done.returncode == 0, done.stderr
+    create = calls.splitlines()[-1]
+    assert create.startswith(
+        f"release create v1.0.0 --repo luxardolabs/brother_ql --verify-tag --title 1.0.0 --notes-file {notes} "
+    )
+    assert create.count(str(tmp_path / "built")) == 2
+
+
+@pytest.mark.parametrize(
+    ("sums", "gh_answers"),
+    [
+        # Artifacts that are not what the build recorded.
+        ("0" * 64 + "  brother_ql-1.0.0.tar.gz\n", ""),
+        # gh no longer luxardolabs by the time a person pastes the command.
+        (None, '"api --hostname github.com user --jq .login") echo someone-else ;;\n'),
+    ],
+)
+def test_publish_uploads_nothing_unless_every_check_holds(tmp_path, sums, gh_answers):
+    done, calls = release_gh(
+        tmp_path,
+        "publish",
+        "luxardolabs/brother_ql",
+        "1.0.0",
+        str(tmp_path / "notes"),
+        str(tmp_path / "built"),
+        gh_answers=gh_answers,
+        sums=sums,
+    )
+    assert done.returncode != 0
+    assert "release create" not in calls
+
+
 RUN = SCRIPT.parent / "release-run.sh"
 SHOW_ENV = ["/bin/sh", "-c", 'printf "[%s]" "$@"; echo; env', "show"]
 
@@ -544,7 +673,7 @@ def test_a_refusal_does_not_print_a_makefile_local_value(tmp_path):
     assert "tok3n" not in said
 
 
-@pytest.mark.parametrize("value", [b"reltmp", b"./reltmp", b"../reltmp"])
+@pytest.mark.parametrize("value", [b"reltmp", b"./reltmp", b"../reltmp", b"/tmp/it's"])
 def test_a_relative_tmpdir_is_refused(tmp_path, value):
     environ = b"PATH=/usr/bin\x00TMPDIR=" + value + b"\x00"
     word, said = preflight(tmp_path, ["make", "release"], environ)

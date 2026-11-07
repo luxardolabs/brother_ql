@@ -47,6 +47,10 @@ case "$tmpdir" in
 '' | /*) ;;
 *) refuse "TMPDIR is not an absolute path: set it to one, or unset it" ;;
 esac
+# The command printed for a person to finish by hand quotes paths under it in single quotes.
+case "$tmpdir" in
+*\'*) refuse "TMPDIR holds a single quote, which would break the command printed to finish a release: use another" ;;
+esac
 
 # Makefiles the dirty check below cannot see. Makefile.local is gitignored, and it holds settings only.
 for other in GNUmakefile makefile; do
@@ -71,7 +75,7 @@ common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) 
 # The gate's clone reads this repository by <checkout>/./.git, which an older git does not trust from the
 # command line. Asked here as the clone will ask, so it stops before the gate, not after.
 top=$(pwd -P)
-git -c protocol.file.allow=always -c "safe.directory=$top/./.git" ls-remote "$top" HEAD >/dev/null 2>&1 || refuse "git cannot read this repository the way the release's clone does, most often for its owner: add $top/./.git to the global safe.directory"
+git -c protocol.file.allow=always -c "safe.directory=$top/./.git" ls-remote "$top/." HEAD >/dev/null 2>&1 || refuse "git cannot read this repository the way the release's clone does, most often for its owner: add $top/./.git to the global safe.directory"
 replaced=$(git for-each-ref refs/replace 2>/dev/null) || refuse "cannot read refs/replace"
 [ -z "$replaced" ] || refuse "refs/replace is set, so git would read other commits than the ones it pushes"
 # --all, because git push goes to every URL a remote lists and plain get-url names only the first.
@@ -138,14 +142,16 @@ done
 # curl reads this before git asks gh, so the push would authenticate as whoever it names: an entry for
 # github.com in any case, or a default entry, which applies to every host. Read as curl reads it: a line
 # starting with # is a comment, a macdef body runs to the next blank line, a value follows each keyword,
-# and a word may be quoted.
+# and a quoted word runs to its closing quote, spaces and all.
 if [ -f "${HOME:-}/.netrc" ] && awk '
 	{ gsub(/\r/, "") }
 	in_macro { if ($0 ~ /^[ \t]*$/) in_macro = 0; next }
 	/^[ \t]*#/ { next }
 	{
 		for (i = 1; i <= NF; i++) {
-			word = tolower($i); gsub(/^"|"$/, "", word)
+			word = $i
+			if (word ~ /^"/) while ((length(word) < 2 || word !~ /[^\\]"$/) && i < NF) word = word " " $(++i)
+			word = tolower(word); gsub(/^"|"$/, "", word)
 			if (value == "host") { if (word == "github.com") found = 1; value = ""; continue }
 			if (value == "macro") { value = ""; in_macro = 1; next }
 			if (value == "other") { value = ""; continue }
