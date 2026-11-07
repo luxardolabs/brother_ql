@@ -569,7 +569,7 @@ def test_publish_uploads_the_checked_artifacts_to_the_tag(tmp_path):
     [
         # Artifacts that are not what the build recorded.
         ("0" * 64 + "  brother_ql-1.0.0.tar.gz\n", ""),
-        # gh no longer luxardolabs by the time a person pastes the command.
+        # gh speaking for another account by the time a person pastes the command.
         (None, '"api --hostname github.com user --jq .login") echo someone-else ;;\n'),
     ],
 )
