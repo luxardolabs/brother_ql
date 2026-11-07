@@ -10,17 +10,14 @@
 # The gh that publishes must know `release create --verify-tag` (gh 2.21 or later), or a release would
 # push its tag and then fail to make the Release.
 # publish: asks ready again, checks the artifacts against the sums the build recorded, then creates the
-# Release for the pushed tag. It works from the checkout this script is in, wherever a person pastes it.
+# Release for the pushed tag. Run from the checkout, as the recipe and its printed command do.
+run() {
+	/bin/sh "$(dirname "$0")/release-run.sh" "$@"
+}
+
 die() {
 	printf 'release: %s\n' "$1" >&2
 	exit 1
-}
-
-root=$(cd "$(dirname "$0")/.." && pwd -P) || die "cannot find the checkout release-gh.sh is in"
-cd "$root" || die "cannot enter $root"
-
-run() {
-	/bin/sh "$root/scripts/release-run.sh" "$@"
 }
 
 ready() {
