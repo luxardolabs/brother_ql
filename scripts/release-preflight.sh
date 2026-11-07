@@ -68,6 +68,10 @@ inside=$(git rev-parse --is-inside-work-tree 2>&1)
 git_dir=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || refuse "cannot read git's directory"
 common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || refuse "cannot read git's common directory"
 [ "$git_dir" = "$common_dir" ] || refuse "this is a linked worktree: release from the main checkout"
+# The gate's clone reads this repository by <checkout>/./.git, which an older git does not trust from the
+# command line. Asked here as the clone will ask, so it stops before the gate, not after.
+top=$(pwd -P)
+git -c protocol.file.allow=always -c "safe.directory=$top/./.git" ls-remote "$top" HEAD >/dev/null 2>&1 || refuse "git cannot read this repository the way the release's clone does, most often for its owner: add $top/./.git to the global safe.directory"
 replaced=$(git for-each-ref refs/replace 2>/dev/null) || refuse "cannot read refs/replace"
 [ -z "$replaced" ] || refuse "refs/replace is set, so git would read other commits than the ones it pushes"
 # --all, because git push goes to every URL a remote lists and plain get-url names only the first.
@@ -91,10 +95,10 @@ trusts_as_usual() {
 	[ $? -le 1 ] || refuse "cannot read git's config"
 	trust=$(printf '%s\n' "$http" | grep -E '^http\.(sslverify|sslcainfo|sslcapath|extraheader) ' | grep -vE '^http\.sslverify (true|yes|on|1)$' | head -n 1 | cut -d' ' -f1)
 	[ -z "$trust" ] || refuse "$trust is set for github.com, which changes whom git trusts or what it sends on the push: unset it"
-	# gh's helper declines a username it does not hold, and git then asks whatever else will answer.
-	git config --get-urlmatch credential.username "$1" >/dev/null 2>&1
+	# gh's helper declines a username other than its account's, and git then asks whatever else will answer.
+	username=$(git config --get-urlmatch credential.username "$1" 2>/dev/null)
 	case $? in
-	0) refuse "a credential username is set for github.com, so the push would not authenticate with gh's token: unset it" ;;
+	0) [ "$username" = luxardolabs ] || refuse "a credential username other than luxardolabs is set for github.com, so the push would not authenticate with gh's token: unset it" ;;
 	1) ;;
 	*) refuse "cannot read git's config" ;;
 	esac
@@ -132,8 +136,26 @@ for key in core.gitProxy core.fsmonitor core.alternateRefsCommand core.askPass r
 	[ -z "$value" ] || refuse "$key is set, which changes where or how the release is pushed"
 done
 # curl reads this before git asks gh, so the push would authenticate as whoever it names: an entry for
-# github.com in any case, or a default entry, which applies to every host. Read as curl reads it, in words.
-if [ -f "${HOME:-}/.netrc" ] && tr -s ' \t\r\n' '\n\n\n\n' <"$HOME/.netrc" | tr 'A-Z' 'a-z' | awk 'previous == "machine" && $0 == "github.com" { found = 1 } $0 == "default" { found = 1 } { previous = $0 } END { exit !found }'; then
+# github.com in any case, or a default entry, which applies to every host. Read as curl reads it: a line
+# starting with # is a comment, a macdef body runs to the next blank line, a value follows each keyword,
+# and a word may be quoted.
+if [ -f "${HOME:-}/.netrc" ] && awk '
+	{ gsub(/\r/, "") }
+	in_macro { if ($0 ~ /^[ \t]*$/) in_macro = 0; next }
+	/^[ \t]*#/ { next }
+	{
+		for (i = 1; i <= NF; i++) {
+			word = tolower($i); gsub(/^"|"$/, "", word)
+			if (value == "host") { if (word == "github.com") found = 1; value = ""; continue }
+			if (value == "macro") { value = ""; in_macro = 1; next }
+			if (value == "other") { value = ""; continue }
+			if (word == "machine") value = "host"
+			else if (word == "default") found = 1
+			else if (word == "macdef") value = "macro"
+			else if (word == "login" || word == "password" || word == "account") value = "other"
+		}
+	}
+	END { exit !found }' "$HOME/.netrc"; then
 	refuse "~/.netrc has an entry for github.com or a default one, so the push would use it instead of gh's token: remove that entry"
 fi
 
@@ -165,7 +187,7 @@ BYTES*) refuse "${different#BYTES } on disk is not a plain file holding the byte
 esac
 
 version=$(git show HEAD:VERSION 2>/dev/null)
-printf '%s\n' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || refuse "VERSION at HEAD is not X.Y.Z: '$version'"
+printf '%s\n' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || refuse "VERSION at HEAD is not X.Y.Z"
 [ "$(printf '%s\n' "$version" | wc -l)" = 1 ] || refuse "VERSION at HEAD is more than one line"
 notes=$(git show HEAD:CHANGELOG.md 2>/dev/null | awk -v h="## $version " 'index($0, h) == 1 { f = 1; next } /^## / { f = 0 } f' | tr -d '[:space:]')
 [ -n "$notes" ] || refuse "CHANGELOG.md at HEAD has no notes under '## $version'"
@@ -173,8 +195,9 @@ if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
 	refuse "tag v$version already exists"
 fi
 # A version goes forward, or a merge that left VERSION behind would publish an old number on new code.
+# Only release tags count: a pre-release such as v2.1.0-rc1 sorts above v2.1.0.
 latest=$(git for-each-ref --sort=-v:refname --format='%(refname:strip=2)' 'refs/tags/v[0-9]*' 2>/dev/null) || refuse "cannot read the tags"
-latest=$(printf '%s\n' "$latest" | head -n 1)
+latest=$(printf '%s\n' "$latest" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
 if [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "${latest#v}" "$version" | sort -V | tail -n 1)" != "$version" ]; then
 	refuse "VERSION $version is not above $latest, the newest release tag"
 fi

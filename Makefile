@@ -783,15 +783,16 @@ override RELEASE_RUN = /bin/sh scripts/release-run.sh
 # git, reaching GitHub: an empty value clears every helper config set, so only gh's token is offered.
 override RELEASE_GIT = $(RELEASE_RUN) git --no-pager -c credential.helper= -c 'credential.helper=!gh auth git-credential'
 # gh, asked at the start and again before the tag: its socket setting would take the token, and the
-# account it is signed in as pushes and publishes. Only github.com is asked, so another host gh holds that
-# cannot be reached does not read as signed out.
+# account it is signed in as pushes and publishes. Only github.com's active account is asked, so another
+# host or another account gh holds does not read as signed out, and the API is asked of github.com itself.
 override RELEASE_GH_READY = [ -z "$$($(RELEASE_RUN) gh config get http_unix_socket 2>/dev/null)" ] || { echo "release: gh's http_unix_socket is set, which sends gh's token to that socket: unset it"; exit 1; }; \
-	$(RELEASE_RUN) gh auth status --hostname github.com >/dev/null 2>&1 || { echo "release: gh is not signed in to github.com (gh auth login), and the Release is the last step"; exit 1; }; \
-	[ "$$($(RELEASE_RUN) gh api user --jq .login 2>/dev/null)" = luxardolabs ] || { echo "release: gh is not signed in as luxardolabs, which pushes and publishes the release: gh auth switch"; exit 1; }
-# The artifacts' checksums, recorded at the build and checked before the tag and before the upload, since
-# dist/ stays writable while the pre-push hook runs. Kept in git's directory, which no build writes.
+	$(RELEASE_RUN) gh auth status --hostname github.com --active >/dev/null 2>&1 || { echo "release: gh's active account on github.com is not signed in (gh auth login), and the Release is the last step"; exit 1; }; \
+	[ "$$($(RELEASE_RUN) gh api --hostname github.com user --jq .login 2>/dev/null)" = luxardolabs ] || { echo "release: gh is not signed in to github.com as luxardolabs, which pushes and publishes the release: gh auth switch"; exit 1; }
+# The artifacts' checksums, recorded at the build. Before the tag the artifacts are copied to a private
+# directory and the copy is checked, so the upload is what was built though dist/ stays writable. The sums
+# are kept in git's directory, which no build writes, and replaced rather than rewritten, since a release
+# run as another user leaves the file its own.
 override RELEASE_SUMS = "$$(git rev-parse --path-format=absolute --git-path release-dist.sha256)"
-override RELEASE_DIST_SAME = [ "$$(ls dist | wc -l)" = 2 ] && ( S=$(RELEASE_SUMS); cd dist && sha256sum --check --quiet --strict "$$S" >/dev/null 2>&1 )
 
 # Builds the sdist and wheel of the tree mounted from $(1), a quoted path.
 override BUILD_ARTIFACTS = docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOME=/tmp -v $(1):/repo -w /repo $(TAIL_IMAGE) sh -c 'pip install -q --root-user-action=ignore build >/dev/null && python -m build --outdir dist'
@@ -833,26 +834,26 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 	$(call BUILD_ARTIFACTS,"$$D"); \
 	rm -rf dist; mv "$$D/dist" dist; \
 	[ "$$(ls dist | wc -l)" = 2 ] && [ -f dist/brother_ql-$(RELEASE_VERSION).tar.gz ] && ls dist/brother_ql-$(RELEASE_VERSION)-*.whl >/dev/null || { echo "release: dist/ is not the sdist and wheel of $(RELEASE_VERSION):"; ls dist; exit 1; }; \
-	( S=$(RELEASE_SUMS); cd dist && sha256sum brother_ql-$(RELEASE_VERSION)* >"$$S" )
-	@set -e; N=$$(mktemp); trap 'rm -f "$$N"' EXIT; trap 'rm -f "$$N"; exit 130' $(RELEASE_SIGNALS); \
+	( S=$(RELEASE_SUMS); rm -f "$$S"; cd dist && sha256sum brother_ql-$(RELEASE_VERSION)* >"$$S" )
+	@set -e; N=$$(mktemp); U=$$(mktemp -d); trap 'rm -rf "$$N" "$$U"' EXIT; trap 'rm -rf "$$N" "$$U"; exit 130' $(RELEASE_SIGNALS); \
 	[ "$$(git rev-parse HEAD)" = "$(RELEASE_HEAD)" ] || { echo "release: HEAD moved during the gate, so that commit was not judged: run it again"; exit 1; }; \
 	[ "$$(/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-preflight.sh /proc/$$PPID)" = ok ] || { echo "release: the tree or its settings changed during the gate: run it again"; exit 1; }; \
 	$(RELEASE_GH_READY); \
-	$(RELEASE_DIST_SAME) || { echo "release: dist/ changed after the build, so it is not what was built from the judged commit: run it again"; exit 1; }; \
+	cp dist/brother_ql-$(RELEASE_VERSION)* "$$U"/; \
+	[ "$$(ls "$$U" | wc -l)" = 2 ] && ( S=$(RELEASE_SUMS); cd "$$U" && sha256sum --check --quiet --strict "$$S" >/dev/null 2>&1 ) || { echo "release: dist/ changed after the build, so it is not what was built from the judged commit: run it again"; exit 1; }; \
 	git show $(RELEASE_HEAD):CHANGELOG.md | awk -v h='## $(RELEASE_VERSION) ' 'index($$0, h) == 1 { f = 1; next } /^## / { f = 0 } f' > "$$N"; \
-	FINISH="$(RELEASE_RUN) gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title $(RELEASE_VERSION) --notes-file '$$N' dist/*"; \
+	FINISH="$(RELEASE_RUN) gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title $(RELEASE_VERSION) --notes-file '$$N' '$$U'/*"; \
 	trap - EXIT; trap 'echo "release: interrupted after tagging. Check with: $(RELEASE_RUN) git ls-remote --tags origin. If v$(RELEASE_VERSION) arrived, finish with: $$FINISH. If not: git tag -d v$(RELEASE_VERSION)"; exit 130' $(RELEASE_SIGNALS); \
-	$(RELEASE_RUN) git tag --no-sign --cleanup=verbatim -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD) || { rm -f "$$N"; exit 1; }; \
-	[ "$$(git rev-parse 'refs/tags/v$(RELEASE_VERSION)^{commit}')" = "$(RELEASE_HEAD)" ] || { echo "release: the tag v$(RELEASE_VERSION) does not name the judged commit, and nothing was pushed. Compare them, then: git tag -d v$(RELEASE_VERSION)"; rm -f "$$N"; exit 1; }; \
+	$(RELEASE_RUN) git tag --no-sign --cleanup=verbatim -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD) || { rm -rf "$$N" "$$U"; exit 1; }; \
+	[ "$$(git rev-parse 'refs/tags/v$(RELEASE_VERSION)^{commit}')" = "$(RELEASE_HEAD)" ] || { echo "release: the tag v$(RELEASE_VERSION) does not name the judged commit, and nothing was pushed. Compare them, then: git tag -d v$(RELEASE_VERSION)"; rm -rf "$$N" "$$U"; exit 1; }; \
 	$(RELEASE_GIT) -c push.followTags=false push --atomic origin $(RELEASE_HEAD):refs/heads/main refs/tags/v$(RELEASE_VERSION) || { \
 	  if ! R=$$($(RELEASE_GIT) ls-remote --tags origin refs/tags/v$(RELEASE_VERSION) 'refs/tags/v$(RELEASE_VERSION)^{}'); then echo "release: the push failed and origin cannot be read, so whether v$(RELEASE_VERSION) arrived is unknown. The local tag is kept. Check with: $(RELEASE_RUN) git ls-remote --tags origin. If it arrived, finish with: $$FINISH. If not: git tag -d v$(RELEASE_VERSION)"; exit 1; fi; \
-	  if [ -z "$$R" ]; then git tag -d v$(RELEASE_VERSION); rm -f "$$N"; echo "release: the push failed and v$(RELEASE_VERSION) is not on origin, so nothing was published and the local tag was removed"; exit 1; fi; \
+	  if [ -z "$$R" ]; then git tag -d v$(RELEASE_VERSION); rm -rf "$$N" "$$U"; echo "release: the push failed and v$(RELEASE_VERSION) is not on origin, so nothing was published and the local tag was removed"; exit 1; fi; \
 	  P=$$(printf '%s\n' "$$R" | tail -n 1 | cut -f1); \
 	  if [ "$$P" = "$(RELEASE_HEAD)" ]; then echo "release: the push reported a failure, but v$(RELEASE_VERSION) is on origin at the judged commit, and this run made no Release. Unless someone else has, finish with: $$FINISH"; else echo "release: v$(RELEASE_VERSION) on origin names $$P, not the judged $(RELEASE_HEAD), so someone else tagged it. Nothing of this run was published on that tag. The local tag is kept: compare them, then: git tag -d v$(RELEASE_VERSION)"; fi; \
 	  exit 1; }; \
-	$(RELEASE_DIST_SAME) || { echo "release: v$(RELEASE_VERSION) is pushed, but dist/ changed after the build, so nothing was uploaded. Rebuild it from the tag (git checkout v$(RELEASE_VERSION) && make build), then finish with: $$FINISH"; exit 1; }; \
-	$(RELEASE_RUN) gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title "$(RELEASE_VERSION)" --notes-file "$$N" dist/* || { echo "release: v$(RELEASE_VERSION) is pushed but has no Release. Finish with: $$FINISH"; exit 1; }; \
-	rm -f "$$N"; \
+	$(RELEASE_RUN) gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title "$(RELEASE_VERSION)" --notes-file "$$N" "$$U"/* || { echo "release: v$(RELEASE_VERSION) is pushed but has no Release. Finish with: $$FINISH"; exit 1; }; \
+	rm -rf "$$N" "$$U"; \
 	echo "released v$(RELEASE_VERSION) — now mirror it to LuxPM (see .claude/skills/release/SKILL.md)"
 
 ##@ Build

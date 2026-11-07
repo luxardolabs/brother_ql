@@ -223,10 +223,10 @@ def test_gh_is_checked_before_the_gate_and_again_before_the_tag():
     # The socket would take the token at the first thing gh does, so it is asked first.
     order = [
         "$(RELEASE_RUN) gh config get http_unix_socket",
-        # Only github.com, so an unreachable second host gh holds does not read as signed out.
-        "$(RELEASE_RUN) gh auth status --hostname github.com",
-        # The account gh is signed in as pushes and publishes.
-        '[ "$$($(RELEASE_RUN) gh api user --jq .login 2>/dev/null)" = luxardolabs ]',
+        # Only github.com's active account, so another host or account gh holds does not count.
+        "$(RELEASE_RUN) gh auth status --hostname github.com --active",
+        # The account gh is signed in as pushes and publishes, asked of github.com itself.
+        '[ "$$($(RELEASE_RUN) gh api --hostname github.com user --jq .login 2>/dev/null)" = luxardolabs ]',
     ]
     assert [ready.index(step) for step in order] == sorted(
         ready.index(step) for step in order
@@ -237,20 +237,21 @@ def test_gh_is_checked_before_the_gate_and_again_before_the_tag():
     assert text.rindex("$(RELEASE_GH_READY)") < text.index("git tag --no-sign")
 
 
-def test_dist_is_checked_against_its_build_before_the_tag_and_the_upload():
+def test_what_is_uploaded_is_a_checked_private_copy_of_the_build():
     text = "\n".join(recipe("release"))
-    record = '( S=$(RELEASE_SUMS); cd dist && sha256sum brother_ql-$(RELEASE_VERSION)* >"$$S" )'
+    # Replaced, not rewritten, since a release run as another user leaves the file its own.
+    record = '( S=$(RELEASE_SUMS); rm -f "$$S"; cd dist && sha256sum brother_ql-$(RELEASE_VERSION)* >"$$S" )'
     assert record in text
-    assert "sha256sum --check --quiet --strict" in joined("RELEASE_DIST_SAME")
-    assert '[ "$$(ls dist | wc -l)" = 2 ]' in joined("RELEASE_DIST_SAME")
-    checks = [
-        i for i in range(len(text)) if text.startswith("$(RELEASE_DIST_SAME) ||", i)
-    ]
-    assert len(checks) == 2
-    assert text.index(record) < checks[0] < text.index("git tag --no-sign")
-    # The last mention is the upload itself; the first is the command printed for a person.
-    upload = text.rindex("$(RELEASE_RUN) gh release create")
-    assert text.index("-c push.followTags=false push") < checks[1] < upload
+    copy = text.index('cp dist/brother_ql-$(RELEASE_VERSION)* "$$U"/')
+    check = text.index('cd "$$U" && sha256sum --check --quiet --strict "$$S"')
+    assert text.index(record) < copy < check < text.index("git tag --no-sign")
+    assert "U=$$(mktemp -d)" in text
+    # The upload and the command printed for a person both take the checked copy, never dist/.
+    assert '--notes-file "$$N" "$$U"/* ||' in text
+    assert "--notes-file '$$N' '$$U'/*\"" in text
+    assert "dist/*" not in text
+    # From the tag on, the copy stays for the command that finishes the Release.
+    assert text.index("trap - EXIT;") < text.index("git tag --no-sign")
 
 
 def test_an_interrupt_stops_the_recipe_shell():
@@ -259,7 +260,7 @@ def test_an_interrupt_stops_the_recipe_shell():
     signals = definition("RELEASE_SIGNALS").split(" = ")[1].split()
     for signal in ("INT", "TERM", "HUP", "QUIT", "USR1", "ALRM", "PIPE", "XCPU"):
         assert signal in signals
-    assert "trap 'rm -f \"$$N\"; exit 130' $(RELEASE_SIGNALS)" in text
+    assert 'trap \'rm -rf "$$N" "$$U"; exit 130\' $(RELEASE_SIGNALS)' in text
     assert text.count("trap 'rm -rf \"$$D\"; exit 130' $(RELEASE_SIGNALS)") == 2
     assert "EXIT INT TERM" not in text
     # From the tag on, the notes stay for the command that finishes the Release.

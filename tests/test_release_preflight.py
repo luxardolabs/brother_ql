@@ -29,6 +29,7 @@ case "$*" in
 "ls-files --others -- hooks") ;;
 "config --get-urlmatch http "*) exit 1 ;;
 "config --get-urlmatch credential.username "*) exit 1 ;;
+"-c protocol.file.allow=always -c safe.directory="*" ls-remote "*" HEAD") ;;
 "config --name-only --get-regexp "*) exit 1 ;;
 "for-each-ref --sort=-v:refname --format=%(refname:strip=2) refs/tags/v[0-9]*") echo v0.9.0 ;;
 "rev-parse --path-format=absolute --git-dir" | "rev-parse --path-format=absolute --git-common-dir") echo /r/.git ;;
@@ -184,6 +185,17 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
             "credential username",
         ),
         ('"config --get-urlmatch credential.username "*) exit 128 ;;', "git's config"),
+        # The clone reads this repository by <checkout>/./.git, which an older git does not trust.
+        (
+            '"-c protocol.file.allow=always -c safe.directory="*" ls-remote "*" HEAD") exit 128 ;;',
+            "the way the release's clone does",
+        ),
+        # Only a release tag counts, but among those the newest one does.
+        (
+            '"for-each-ref --sort=-v:refname --format=%(refname:strip=2) refs/tags/v[0-9]*") '
+            "printf 'v2.1.0-rc1\\nv2.0.10\\nv2.0.9\\n' ;;",
+            "not above v2.0.10",
+        ),
         # A version goes forward: a merge that left VERSION behind would publish an old number.
         (
             '"for-each-ref --sort=-v:refname --format=%(refname:strip=2) refs/tags/v[0-9]*") '
@@ -355,6 +367,10 @@ def test_git_settings_that_leave_tls_trust_alone_pass(tmp_path, line):
         "default login a password s3cret\n",
         "machine other.invalid login a password b\ndefault\nlogin a password s3cret\n",
         "machine\tgithub.com\r\n\tlogin a\r\n\tpassword s3cret\r\n",
+        # A word may be quoted, and an entry can follow a comment or a macro.
+        'machine "github.com" login a password s3cret\n',
+        "# for the proxy\nmachine github.com login a password s3cret\n",
+        "macdef init\ncd /\n\nmachine github.com login a password s3cret\n",
     ],
 )
 def test_a_netrc_entry_curl_would_use_for_github_is_refused(tmp_path, netrc):
@@ -372,11 +388,38 @@ def test_a_netrc_entry_curl_would_use_for_github_is_refused(tmp_path, netrc):
         # api.github.com is another host to curl, and a comment is not an entry.
         "machine api.github.com login a password b\n",
         "# github.com, retired\nmachine other.invalid login a password b\n",
+        # The words default and github.com where curl does not read them as an entry.
+        "# default login for the corporate proxy\nmachine other.invalid login a password b\n",
+        "machine other.invalid login default password github.com\n",
+        "machine other.invalid login a account default password b\n",
+        "machine other.invalid login a password b\nmacdef init\ndefault github.com\n\n",
     ],
 )
 def test_a_netrc_entry_for_another_host_passes(tmp_path, netrc):
     (tmp_path / ".netrc").write_text(netrc)
     assert preflight(tmp_path, ["make", "release"]) == ("ok", "")
+
+
+@pytest.mark.parametrize(
+    "arm",
+    [
+        # gh's helper answers for its own account, and a pre-release does not count as a release.
+        '"config --get-urlmatch credential.username "*) echo luxardolabs ;;\n',
+        '"for-each-ref --sort=-v:refname --format=%(refname:strip=2) refs/tags/v[0-9]*") '
+        "printf 'v1.0.0-rc1\\nv0.9.0\\n' ;;\n",
+        # A first release has no tag to be above.
+        '"for-each-ref --sort=-v:refname --format=%(refname:strip=2) refs/tags/v[0-9]*") ;;\n',
+    ],
+)
+def test_settings_and_tags_an_ordinary_release_has_pass(tmp_path, arm):
+    assert preflight(tmp_path, ["make", "release"], git_answers=arm) == ("ok", "")
+
+
+def test_a_version_refusal_does_not_print_the_file(tmp_path):
+    arm = '"show HEAD:VERSION") echo ghp_s3cret ;;\n'
+    word, said = preflight(tmp_path, ["make", "release"], git_answers=arm)
+    assert word == "refused"
+    assert "s3cret" not in said
 
 
 @pytest.mark.parametrize("value", ["false", "FALSE", "no", "off", "0"])
