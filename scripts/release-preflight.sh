@@ -83,6 +83,19 @@ names_this_repository() {
 	*) return 1 ;;
 	esac
 }
+# A proxy sees nothing while TLS still has to name github.com. These change whom TLS trusts, so a machine
+# in the middle would get the refs and the token. Asked of the URL itself, as the push asks, so a setting
+# scoped to another host does not count, and one scoped to this host or this repository does.
+trusts_as_usual() {
+	case "$1" in
+	https://*) ;;
+	*) return 0 ;;
+	esac
+	http=$(git config --get-urlmatch http "$1" 2>/dev/null)
+	[ $? -le 1 ] || refuse "cannot read git's config"
+	trust=$(printf '%s\n' "$http" | grep -E '^http\.(sslverify|sslcainfo|sslcapath) ' | grep -vE '^http\.sslverify (true|yes|on|1)$' | head -n 1 | cut -d' ' -f1)
+	[ -z "$trust" ] || refuse "$trust is set for github.com, which changes whom git trusts on the push: unset it"
+}
 # A refusal names no URL: any part of one can hold a token, and a refusal is read and pasted.
 words=$IFS
 IFS='
@@ -90,22 +103,17 @@ IFS='
 set -f
 for url in $fetch_urls; do
 	names_this_repository "$url" || refuse "origin's fetch URL does not name luxardolabs/brother_ql, where the Release goes: see git remote -v"
+	trusts_as_usual "$url"
 done
 for url in $push_urls; do
 	names_this_repository "$url" || refuse "origin's push URL does not name luxardolabs/brother_ql, where the Release goes: see git remote -v"
+	trusts_as_usual "$url"
 done
 set +f
 IFS=$words
 for key in core.sshCommand core.gitProxy remote.origin.receivepack remote.origin.uploadpack remote.origin.vcs; do
 	[ -z "$(git config --get "$key" 2>/dev/null)" ] || refuse "$key is set, which changes where or how the release is pushed"
 done
-# A proxy sees nothing while TLS still has to name github.com. These change whom TLS trusts, so a machine
-# in the middle would get the refs and the token. Asked as the push will ask, so a setting scoped to
-# another host does not count, and a URL-scoped one for this host does.
-http=$(git config --get-urlmatch http https://github.com/ 2>/dev/null)
-[ $? -le 1 ] || refuse "cannot read git's config"
-trust=$(printf '%s\n' "$http" | grep -E '^http\.(sslverify|sslcainfo|sslcapath) ' | grep -vE '^http\.sslverify (true|yes|on|1)$' | head -n 1 | cut -d' ' -f1)
-[ -z "$trust" ] || refuse "$trust is set for github.com, which changes whom git trusts on the push: unset it"
 
 status=$(git -c core.fsmonitor=false status --porcelain --untracked-files=all 2>/dev/null) || refuse "git status failed: check the repository's config"
 [ -z "$status" ] || refuse "the working tree is dirty: commit first"

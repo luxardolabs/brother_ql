@@ -25,7 +25,7 @@ case "$*" in
 "for-each-ref refs/replace") ;;
 "remote get-url --all origin" | "remote get-url --push --all origin") echo https://github.com/luxardolabs/brother_ql.git ;;
 "config --get "*) ;;
-"config --get-urlmatch http https://github.com/") exit 1 ;;
+"config --get-urlmatch http "*) exit 1 ;;
 "rev-parse --path-format=absolute --git-dir" | "rev-parse --path-format=absolute --git-common-dir") echo /r/.git ;;
 "-c core.fsmonitor=false status --porcelain --untracked-files=all") ;;
 "var GIT_COMMITTER_IDENT") echo 'luxardolabs <214140984+luxardolabs@users.noreply.github.com> 1700000000 +0000' ;;
@@ -166,20 +166,27 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
         ('"config --get core.gitProxy") echo evil ;;', "core.gitProxy"),
         # A machine in the middle needs TLS to trust it, in any spelling of the key.
         (
-            "\"config --get-urlmatch http https://github.com/\") echo 'http.sslverify false' ;;",
+            "\"config --get-urlmatch http \"*) echo 'http.sslverify false' ;;",
             "whom git trusts",
         ),
         (
-            "\"config --get-urlmatch http https://github.com/\") echo 'http.sslcainfo /tmp/x.pem' ;;",
+            "\"config --get-urlmatch http \"*) echo 'http.sslcainfo /tmp/x.pem' ;;",
             "whom git trusts",
         ),
         (
-            "\"config --get-urlmatch http https://github.com/\") echo 'http.sslcapath /tmp/x' ;;",
+            "\"config --get-urlmatch http \"*) echo 'http.sslcapath /tmp/x' ;;",
+            "whom git trusts",
+        ),
+        ('"config --get-urlmatch http "*) exit 128 ;;', "git's config"),
+        # Asked of the URL the push uses: a setting can be scoped to this repository's own path.
+        (
+            "\"config --get-urlmatch http https://github.com/luxardolabs/brother_ql.git\") echo 'http.sslverify false' ;;",
             "whom git trusts",
         ),
         (
-            '"config --get-urlmatch http https://github.com/") exit 128 ;;',
-            "git's config",
+            '"remote get-url --push --all origin") echo https://github.com/luxardolabs/brother_ql ;;\n'
+            "\"config --get-urlmatch http https://github.com/luxardolabs/brother_ql\") echo 'http.sslcainfo /tmp/x.pem' ;;",
+            "whom git trusts",
         ),
         # A clone of a linked worktree lacks the main checkout's reflog and heartbeat.
         (
@@ -271,8 +278,94 @@ def test_a_refusal_does_not_print_a_token_in_the_url(tmp_path, url):
     ],
 )
 def test_git_settings_that_leave_tls_trust_alone_pass(tmp_path, line):
-    arm = f'"config --get-urlmatch http https://github.com/") {line} ;;\n'
+    arm = f'"config --get-urlmatch http "*) {line} ;;\n'
     assert preflight(tmp_path, ["make", "release"], git_answers=arm) == ("ok", "")
+
+
+def test_an_ssh_url_is_not_asked_about_tls(tmp_path):
+    ssh = "git@github.com:luxardolabs/brother_ql.git"
+    arm = (
+        f'"remote get-url --all origin" | "remote get-url --push --all origin") echo {ssh} ;;\n'
+        '"config --get-urlmatch http "*) exit 99 ;;\n'
+    )
+    assert preflight(tmp_path, ["make", "release"], git_answers=arm) == ("ok", "")
+
+
+RUN = SCRIPT.parent / "release-run.sh"
+SHOW_ENV = ["/bin/sh", "-c", 'printf "[%s]" "$@"; echo; env', "show"]
+
+
+def run_under_allowance(environ, *arguments):
+    """Run the allowance script, and return (exit status, arguments seen, environment seen)."""
+    done = subprocess.run(
+        ["/bin/sh", str(RUN), *SHOW_ENV, *arguments],
+        capture_output=True,
+        text=True,
+        env=environ,
+    )
+    first, _, rest = done.stdout.partition("\n")
+    seen = dict(line.split("=", 1) for line in rest.splitlines() if "=" in line)
+    return done.returncode, first, seen
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # Print gh's token, and load a module into the process holding it.
+        "GODEBUG",
+        "OPENSSL_CONF",
+        "OPENSSL_MODULES",
+        # A name nobody listed yet is the point.
+        "SOME_FUTURE_VARIABLE",
+        "LD_AUDIT",
+        "SSL_CERT_FILE",
+        "GIT_TRACE_CURL",
+        "MAKEFLAGS",
+    ],
+)
+def test_a_name_the_allowance_does_not_list_does_not_reach_the_command(name):
+    _, _, seen = run_under_allowance({"PATH": "/usr/bin:/bin", name: "x"})
+    assert name not in seen
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "TMPDIR",
+        "SSH_AUTH_SOCK",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "NO_PROXY",
+    ],
+)
+def test_what_finds_config_keyring_token_and_proxy_reaches_the_command(name):
+    value = "a value with 'quotes' and $dollars and spaces"
+    _, _, seen = run_under_allowance({"PATH": "/usr/bin:/bin", name: value})
+    assert seen[name] == value
+    assert seen["PATH"] == "/usr/bin:/bin"
+
+
+def test_a_name_that_is_not_set_stays_not_set():
+    _, _, seen = run_under_allowance({"PATH": "/usr/bin:/bin"})
+    assert "GH_TOKEN" not in seen
+    assert "HTTPS_PROXY" not in seen
+
+
+def test_the_allowance_keeps_arguments_whole_and_returns_the_status():
+    rc, first, _ = run_under_allowance({"PATH": "/usr/bin:/bin"}, "a b", "c=d", "$e")
+    assert rc == 0
+    assert first == "[a b][c=d][$e]"
+    done = subprocess.run(
+        ["/bin/sh", str(RUN), "/bin/sh", "-c", "exit 7"],
+        env={"PATH": "/usr/bin:/bin"},
+    )
+    assert done.returncode == 7
 
 
 def test_a_refusal_does_not_print_a_makefile_local_value(tmp_path):

@@ -135,6 +135,25 @@ def test_the_gate_runs_in_a_fresh_clone_of_the_judged_commit():
     )
 
 
+def test_every_line_that_talks_to_github_or_tags_runs_under_the_allowance():
+    assert definition("RELEASE_RUN") == (
+        "override RELEASE_RUN = /bin/sh scripts/release-run.sh"
+    )
+    text = "\n".join(recipe("release"))
+    for command in (
+        "gh config get http_unix_socket",
+        "gh auth status",
+        "git fetch -q origin",
+        "git tag --no-sign",
+        "git -c push.followTags=false push",
+        'gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title "',
+    ):
+        assert f"$(RELEASE_RUN) {command}" in text, command
+    # Both reads of origin, leaving the words of the messages that tell a person what to run.
+    assert text.count("$(RELEASE_RUN) git ls-remote --tags origin refs/") == 2
+    assert "Check with: git ls-remote" in text
+
+
 def test_the_artifacts_come_from_an_export_of_the_judged_commit():
     text = "\n".join(recipe("release"))
     assert '/bin/sh scripts/release-export.sh $(RELEASE_HEAD) "$$D"' in text
