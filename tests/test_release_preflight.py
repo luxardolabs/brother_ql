@@ -25,7 +25,8 @@ case "$*" in
 "for-each-ref refs/replace") ;;
 "remote get-url --all origin" | "remote get-url --push --all origin") echo https://github.com/luxardolabs/brother_ql.git ;;
 "config --get "*) ;;
-"config --name-only --get-regexp "*) exit 1 ;;
+"config --get-urlmatch http https://github.com/") exit 1 ;;
+"rev-parse --path-format=absolute --git-dir" | "rev-parse --path-format=absolute --git-common-dir") echo /r/.git ;;
 "-c core.fsmonitor=false status --porcelain --untracked-files=all") ;;
 "var GIT_COMMITTER_IDENT") echo 'luxardolabs <214140984+luxardolabs@users.noreply.github.com> 1700000000 +0000' ;;
 "-c core.quotepath=off ls-tree -r HEAD") printf '100644 blob aaaa\\tVERSION\\n' ;;
@@ -87,7 +88,7 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
         ('"remote get-url --all origin") exit 2 ;;', "origin"),
         (
             '"remote get-url --push --all origin") echo /sink.git ;;',
-            "pushes",
+            "push URL",
         ),
         # A git that dies prints nothing, which must not read as a clean tree.
         (
@@ -125,7 +126,7 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
         ),
         (
             '"remote get-url --all origin" | "remote get-url --push --all origin") echo /fork.git ;;',
-            "fetches from",
+            "fetch URL",
         ),
         ('"remote get-url --all origin") ;;', "there is no origin"),
         ('"remote get-url --push --all origin") ;;', "no push URL"),
@@ -148,12 +149,12 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
         (
             '"remote get-url --push --all origin") '
             "printf 'https://github.com/luxardolabs/brother_ql.git\\n/sink.git\\n' ;;",
-            "pushes",
+            "push URL",
         ),
         (
             '"remote get-url --all origin" | "remote get-url --push --all origin") '
             "printf 'https://github.com/luxardolabs/brother_ql.git\\n/sink.git\\n' ;;",
-            "fetches from",
+            "fetch URL",
         ),
         # git's own reason, such as dubious ownership, reaches the person.
         (
@@ -165,14 +166,30 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
         ('"config --get core.gitProxy") echo evil ;;', "core.gitProxy"),
         # A machine in the middle needs TLS to trust it, in any spelling of the key.
         (
-            '"config --name-only --get-regexp "*) echo http.sslverify ;;',
+            "\"config --get-urlmatch http https://github.com/\") echo 'http.sslverify false' ;;",
             "whom git trusts",
         ),
         (
-            '"config --name-only --get-regexp "*) echo http.https://github.com/.sslcainfo ;;',
+            "\"config --get-urlmatch http https://github.com/\") echo 'http.sslcainfo /tmp/x.pem' ;;",
             "whom git trusts",
         ),
-        ('"config --name-only --get-regexp "*) exit 128 ;;', "git's config"),
+        (
+            "\"config --get-urlmatch http https://github.com/\") echo 'http.sslcapath /tmp/x' ;;",
+            "whom git trusts",
+        ),
+        (
+            '"config --get-urlmatch http https://github.com/") exit 128 ;;',
+            "git's config",
+        ),
+        # A clone of a linked worktree lacks the main checkout's reflog and heartbeat.
+        (
+            '"rev-parse --path-format=absolute --git-dir") echo /r/.git/worktrees/k ;;',
+            "linked worktree",
+        ),
+        (
+            '"rev-parse --path-format=absolute --git-dir") exit 128 ;;',
+            "git's directory",
+        ),
         ('"show HEAD:VERSION") echo 1.0.0 main ;;', "X.Y.Z"),
         ('"show HEAD:VERSION") exit 128 ;;', "X.Y.Z"),
         ('"show HEAD:CHANGELOG.md") printf "## 1.0.0 - x\\n" ;;', "no notes"),
@@ -229,15 +246,55 @@ def test_each_spelling_of_this_repository_passes(tmp_path, arm):
         "https://user:tok3n/x@github.com/luxardolabs/brother_ql.git",
         "x-access-token:tok3n@github.com:luxardolabs/brother_ql.git",
         "https://github.com/luxardolabs/brother_ql.git?access_token=tok3n",
+        # In the path, after a semicolon, as a host label, and as a bare scp prefix.
+        "https://github.com/x-access-token/tok3n/brother_ql.git",
+        "'https://github.com/luxardolabs/brother_ql.git;tok3n'",
+        "https://tok3n.github.com/luxardolabs/brother_ql.git",
+        "tok3n:x/evil.git",
     ],
 )
 def test_a_refusal_does_not_print_a_token_in_the_url(tmp_path, url):
     arm = f'"remote get-url --push --all origin") echo {url} ;;\n'
     word, said = preflight(tmp_path, ["make", "release"], git_answers=arm)
     assert word == "refused"
-    assert "origin pushes to" in said
-    assert "github.com" in said
+    assert "origin's push URL" in said
     assert "tok3n" not in said
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # Another host's setting never touches this push, and this one is git's default.
+        "echo 'http.sslverify true'",
+        "echo 'http.proxy http://proxy.invalid:3128'",
+        "exit 1",
+    ],
+)
+def test_git_settings_that_leave_tls_trust_alone_pass(tmp_path, line):
+    arm = f'"config --get-urlmatch http https://github.com/") {line} ;;\n'
+    assert preflight(tmp_path, ["make", "release"], git_answers=arm) == ("ok", "")
+
+
+def test_a_refusal_does_not_print_a_makefile_local_value(tmp_path):
+    local = "LUX_REGISTRY := r\nLUX_REGISTRY := u:tok3n@registry.invalid\n"
+    word, said = preflight(tmp_path, ["make", "release"], local=local)
+    assert word == "refused"
+    assert "line 2" in said
+    assert "tok3n" not in said
+
+
+@pytest.mark.parametrize("value", [b"reltmp", b"./reltmp", b"../reltmp"])
+def test_a_relative_tmpdir_is_refused(tmp_path, value):
+    environ = b"PATH=/usr/bin\x00TMPDIR=" + value + b"\x00"
+    word, said = preflight(tmp_path, ["make", "release"], environ)
+    assert word == "refused"
+    assert "TMPDIR" in said
+
+
+@pytest.mark.parametrize("value", [b"/var/tmp", b""])
+def test_an_absolute_or_empty_tmpdir_passes(tmp_path, value):
+    environ = b"PATH=/usr/bin\x00TMPDIR=" + value + b"\x00"
+    assert preflight(tmp_path, ["make", "release"], environ) == ("ok", "")
 
 
 def test_ignored_files_do_not_stop_a_release_because_the_gate_never_reads_them(
@@ -349,6 +406,13 @@ def test_a_name_that_would_change_what_the_gate_runs_is_refused(tmp_path, name):
         b"GIT_PROXY_COMMAND=/tmp/evil",
         b"GIT_ASKPASS=/tmp/evil",
         b"GIT_TRACE_REDACT=0",
+        b"GIT_TRACE_CURL=1",
+        b"GIT_CURL_VERBOSE=1",
+        b"SSL_CERT_FILE=/tmp/evil.pem",
+        b"SSL_CERT_DIR=/tmp/evil",
+        b"SSLKEYLOGFILE=/tmp/keys",
+        b"GCONV_PATH=/tmp/evil",
+        b"HOSTALIASES=/tmp/evil",
         b"GH_PATH=/tmp/evil",
         b"GH_DEBUG=api",
         b"BASH_FUNC_make%%=() { :; }",

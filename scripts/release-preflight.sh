@@ -38,8 +38,14 @@ esac
 # a tool in every recipe line, so all are refused except the few a login shell's profile exports, which
 # name no tool a recipe runs.
 [ -r "$proc/environ" ] || refuse "cannot read make's environment (Linux only)"
-steering=$(grep -zoE '^(MAKEFLAGS|GNUMAKEFLAGS|MAKEFILES|MAKEOVERRIDES|MAKE|MAKE_COMMAND|\.SHELLFLAGS|LUX_REGISTRY|LUXARCH_IMAGE|LUXLINT_IMAGE|LUXAUDIT_IMAGE|TAIL_IMAGE|GIT_IDENTITY_OK|GIT_COMMITTER_NAME|GIT_COMMITTER_EMAIL|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_GRAFT_FILE|GIT_NAMESPACE|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_CONFIG|GIT_CONFIG_[A-Z_]*|GIT_REPLACE_REF_BASE|GIT_EXEC_PATH|GIT_SSH|GIT_SSH_COMMAND|GIT_SSL_[A-Z_]*|GIT_PROXY_COMMAND|GIT_ASKPASS|GIT_TRACE_REDACT|GH_REPO|GH_HOST|GH_ENTERPRISE_TOKEN|GH_CONFIG_DIR|GH_PATH|GH_DEBUG|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|LD_[A-Z_]*|GLIBC_TUNABLES|GLOBIGNORE|BASHOPTS|SHELLOPTS|BASH_ENV|ENV|BASH_FUNC_[^=]*)=' "$proc/environ" | tr '\0' '\n' | grep -vE '^BASH_FUNC_(which|ml|module|switchml|scl|_module_raw)%%=$' | tr '\n' ' ')
+steering=$(grep -zoE '^(MAKEFLAGS|GNUMAKEFLAGS|MAKEFILES|MAKEOVERRIDES|MAKE|MAKE_COMMAND|\.SHELLFLAGS|LUX_REGISTRY|LUXARCH_IMAGE|LUXLINT_IMAGE|LUXAUDIT_IMAGE|TAIL_IMAGE|GIT_IDENTITY_OK|GIT_COMMITTER_NAME|GIT_COMMITTER_EMAIL|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_GRAFT_FILE|GIT_NAMESPACE|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_CONFIG|GIT_CONFIG_[A-Z_]*|GIT_REPLACE_REF_BASE|GIT_EXEC_PATH|GIT_SSH|GIT_SSH_COMMAND|GIT_SSL_[A-Z_]*|GIT_PROXY_COMMAND|GIT_ASKPASS|GIT_TRACE[A-Z0-9_]*|GIT_CURL_VERBOSE|GH_REPO|GH_HOST|GH_ENTERPRISE_TOKEN|GH_CONFIG_DIR|GH_PATH|GH_DEBUG|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|LD_[A-Z_]*|GLIBC_TUNABLES|GCONV_PATH|HOSTALIASES|SSL_CERT_FILE|SSL_CERT_DIR|SSLKEYLOGFILE|GLOBIGNORE|BASHOPTS|SHELLOPTS|BASH_ENV|ENV|BASH_FUNC_[^=]*)=' "$proc/environ" | tr '\0' '\n' | grep -vE '^BASH_FUNC_(which|ml|module|switchml|scl|_module_raw)%%=$' | tr '\n' ' ')
 [ -z "$steering" ] || refuse "the environment sets ${steering}which would steer it: unset them, and put settings in Makefile.local"
+# The gate's legs run in the clone, where a relative path names something else.
+tmpdir=$(tr '\0' '\n' <"$proc/environ" | sed -n 's/^TMPDIR=//p' | head -n 1)
+case "$tmpdir" in
+'' | /*) ;;
+*) refuse "TMPDIR is not an absolute path: set it to one, or unset it" ;;
+esac
 
 # Makefiles the dirty check below cannot see. Makefile.local is gitignored, and it holds settings only.
 for other in GNUmakefile makefile; do
@@ -48,14 +54,19 @@ done
 # Here in this directory, or make's include search could find another. Values are plain words, because
 # make pastes them into recipes as shell text.
 [ -f Makefile.local ] || refuse "there is no Makefile.local here: copy Makefile.local.example"
-unknown=$(grep -vE '^[[:space:]]*(#.*)?$' Makefile.local | grep -vE '^(LUX_REGISTRY|HEAVY_[A-Z_]+)[[:space:]]*(\?|:|::)?=[[:space:]]*[A-Za-z0-9._:/-]*[[:space:]]*$' | head -n 1)
-[ -z "$unknown" ] || refuse "Makefile.local may set only LUX_REGISTRY and HEAVY_*, to plain words, and holds: $unknown"
+unknown=$(grep -nvE '^[[:space:]]*(#.*)?$|^(LUX_REGISTRY|HEAVY_[A-Z_]+)[[:space:]]*(\?|:|::)?=[[:space:]]*[A-Za-z0-9._:/-]*[[:space:]]*$' Makefile.local | head -n 1 | cut -d: -f1)
+[ -z "$unknown" ] || refuse "Makefile.local may set only LUX_REGISTRY and HEAVY_*, to plain words, and line $unknown does not"
 
 # The repository: every read must succeed, since an empty answer from a git that died reads as clean.
 inside=$(git rev-parse --is-inside-work-tree 2>&1)
 [ "$inside" = true ] || refuse "this is not a working tree git can read: $inside"
 [ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$(pwd -P)" ] || refuse "git's working tree is not this directory: check core.worktree"
 [ "$(git symbolic-ref -q HEAD)" = refs/heads/main ] || refuse "releases come from main"
+# Guards read a linked worktree's reflog and heartbeat from the main checkout, which a clone of the
+# worktree would not receive, so a rule red here would go quiet there.
+git_dir=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || refuse "cannot read git's directory"
+common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || refuse "cannot read git's common directory"
+[ "$git_dir" = "$common_dir" ] || refuse "this is a linked worktree: release from the main checkout"
 replaced=$(git for-each-ref refs/replace 2>/dev/null) || refuse "cannot read refs/replace"
 [ -z "$replaced" ] || refuse "refs/replace is set, so git would read other commits than the ones it pushes"
 # --all, because git push goes to every URL a remote lists and plain get-url names only the first.
@@ -72,30 +83,29 @@ names_this_repository() {
 	*) return 1 ;;
 	esac
 }
-# A URL's user part can hold a token, and a refusal is read and pasted.
-without_user() {
-	printf '%s\n' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)?.*@#\1#; s/[?#].*//'
-}
+# A refusal names no URL: any part of one can hold a token, and a refusal is read and pasted.
 words=$IFS
 IFS='
 '
 set -f
 for url in $fetch_urls; do
-	names_this_repository "$url" || refuse "origin fetches from $(without_user "$url"), and the Release goes to luxardolabs/brother_ql"
+	names_this_repository "$url" || refuse "origin's fetch URL does not name luxardolabs/brother_ql, where the Release goes: see git remote -v"
 done
 for url in $push_urls; do
-	names_this_repository "$url" || refuse "origin pushes to $(without_user "$url"), and the Release goes to luxardolabs/brother_ql"
+	names_this_repository "$url" || refuse "origin's push URL does not name luxardolabs/brother_ql, where the Release goes: see git remote -v"
 done
 set +f
 IFS=$words
 for key in core.sshCommand core.gitProxy remote.origin.receivepack remote.origin.uploadpack remote.origin.vcs; do
 	[ -z "$(git config --get "$key" 2>/dev/null)" ] || refuse "$key is set, which changes where or how the release is pushed"
 done
-# A proxy sees nothing while TLS still has to name github.com. These change whom TLS trusts, in any
-# spelling, a URL-scoped one included, so a machine in the middle would get the refs and the token.
-trust=$(git config --name-only --get-regexp '^http\..*(sslverify|sslcainfo|sslcapath)$' 2>/dev/null)
+# A proxy sees nothing while TLS still has to name github.com. These change whom TLS trusts, so a machine
+# in the middle would get the refs and the token. Asked as the push will ask, so a setting scoped to
+# another host does not count, and a URL-scoped one for this host does.
+http=$(git config --get-urlmatch http https://github.com/ 2>/dev/null)
 [ $? -le 1 ] || refuse "cannot read git's config"
-[ -z "$trust" ] || refuse "$(printf '%s\n' "$trust" | head -n 1) is set, which changes whom git trusts on the push: unset it"
+trust=$(printf '%s\n' "$http" | grep -E '^http\.(sslverify|sslcainfo|sslcapath) ' | grep -vE '^http\.sslverify (true|yes|on|1)$' | head -n 1 | cut -d' ' -f1)
+[ -z "$trust" ] || refuse "$trust is set for github.com, which changes whom git trusts on the push: unset it"
 
 status=$(git -c core.fsmonitor=false status --porcelain --untracked-files=all 2>/dev/null) || refuse "git status failed: check the repository's config"
 [ -z "$status" ] || refuse "the working tree is dirty: commit first"

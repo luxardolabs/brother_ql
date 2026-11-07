@@ -109,7 +109,7 @@ def test_the_release_tags_the_commit_it_judged_from_what_head_holds():
     assert text.index("--no-print-directory check") < text.index("HEAD moved")
     # A signature would carry the signer's address past the tagger check.
     assert (
-        'git tag --no-sign -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD)'
+        'git tag --no-sign --cleanup=verbatim -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD)'
         in text
     )
     assert (
@@ -125,8 +125,6 @@ def test_the_gate_runs_in_a_fresh_clone_of_the_judged_commit():
     clone = gate.index('/bin/sh scripts/release-clone.sh $(RELEASE_HEAD) "$$D"')
     # The verdict is the shell's last word, and set -e stops a clone that failed from reaching it.
     assert "set -e; D=$$(mktemp -d)" in gate
-    # Absolute, so that a relative TMPDIR still names the clone after the cd.
-    assert 'D=$$(mktemp -d); D=$$(cd "$$D" && pwd -P); trap' in gate
     # The guards read these words as make's arguments, so a closing bracket here hollows their rules.
     assert gate.endswith('cd "$$D"; $(MAKE) --no-print-directory check')
     assert clone < gate.rindex("$(MAKE)")
@@ -173,14 +171,19 @@ def test_gh_is_checked_before_the_gate_so_a_release_cannot_stop_half_way():
     text = "\n".join(recipe("release"))
     gate = text.index("--no-print-directory check")
     assert text.index("command -v gh") < gate
+    # The token would go to the socket at the first thing gh does.
+    assert text.index("gh config get http_unix_socket") < text.index("gh auth status")
     assert text.index("gh auth status") < gate
 
 
 def test_an_interrupt_stops_the_recipe_shell():
     text = "\n".join(recipe("release"))
-    # HUP is a dropped session and QUIT a keyboard, and a clone holds Makefile.local's registry host.
-    assert "trap 'rm -f \"$$N\"; exit 130' INT TERM HUP QUIT" in text
-    assert text.count("trap 'rm -rf \"$$D\"; exit 130' INT TERM HUP QUIT") == 2
+    # A dropped session or a `timeout -s` must not leave a clone holding Makefile.local's registry host.
+    signals = definition("RELEASE_SIGNALS").split(" = ")[1].split()
+    for signal in ("INT", "TERM", "HUP", "QUIT", "USR1", "ALRM", "PIPE", "XCPU"):
+        assert signal in signals
+    assert "trap 'rm -f \"$$N\"; exit 130' $(RELEASE_SIGNALS)" in text
+    assert text.count("trap 'rm -rf \"$$D\"; exit 130' $(RELEASE_SIGNALS)") == 2
     assert "EXIT INT TERM" not in text
     # From the tag on, the notes stay for the command that finishes the Release.
     assert text.index("trap - EXIT;") < text.index("git tag --no-sign")
