@@ -70,7 +70,8 @@ instructions = convert(
     # Advanced
     compress=False,     # Compress data if supported (default: False)
     red=False,          # Red/black for QL-8xx models (default: False)
-    dpi_600=False,      # 600 DPI mode if supported (default: False)
+    dpi_600=False,      # 600 DPI mode if supported (default: False); draw the image
+                        # at 600 DPI, twice the printable size for a die-cut label
     hq=True,            # High quality mode (default: True)
 
     # Positioning

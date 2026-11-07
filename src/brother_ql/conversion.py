@@ -81,7 +81,10 @@ def convert(
         compress (bool): Enable compression if supported (default: False)
         red (bool): Enable red/black printing (default: False)
         rotate (str|int): Rotation angle or 'auto' (default: 'auto')
-        dpi_600 (bool): Use 600 DPI mode if supported (default: False)
+        dpi_600 (bool): Use 600 DPI mode if supported (default: False). The
+            image is drawn at 600 DPI both ways: for a die-cut label, twice the
+            printable width and height; for an endless one, its rows print at
+            twice the density along the tape.
         hq (bool): High quality printing (default: True)
         threshold (float): B/W threshold percentage (default: 70)
         offset_x (int): Horizontal offset in pixels (default: 0)
@@ -209,13 +212,9 @@ def _process_endless(
     if options["rotate"] != "auto" and options["rotate"] != 0:
         im = im.rotate(float(options["rotate"]), expand=True)
 
-    # Resize to label width
-    if options["dpi_600"]:
-        target_width = label_spec.printable_width * 2
-    else:
-        target_width = label_spec.printable_width
-
-    im = resize_image(im, (target_width, im.size[1]), options["dpi_600"])
+    # Resize to label width. At 600 DPI resize_image scales to twice the width and
+    # halves it across, so the rows keep twice the density along the tape.
+    im = resize_image(im, (label_spec.printable_width, im.size[1]), options["dpi_600"])
 
     # Position on device width if needed
     if im.size[0] < model_spec.pixel_width:
@@ -237,18 +236,22 @@ def _process_die_cut(
     im: Image.Image, label_spec: Any, model_spec: Any, options: dict[str, Any]
 ) -> Image.Image:
     """Process image for die-cut label."""
-    # Expected size
-    expected_size = (label_spec.printable_width, label_spec.printable_height)
+    # At 600 DPI the image is drawn at 600 DPI both ways: twice the printable size. The
+    # head prints 300 dots across, so its width is halved and its rows are kept.
+    scale = 2 if options["dpi_600"] else 1
+    expected_size = (
+        label_spec.printable_width * scale,
+        label_spec.printable_height * scale,
+    )
 
     # Handle rotation
     im = rotate_image(im, options["rotate"], expected_size)
 
     # Validate dimensions (allow full-bleed)
     validate_image_dimensions(
-        im, expected_size, model_spec.pixel_width, allow_full_bleed=True
+        im, expected_size, model_spec.pixel_width * scale, allow_full_bleed=True
     )
 
-    # Handle 600 DPI
     if options["dpi_600"]:
         im = im.resize((im.size[0] // 2, im.size[1]))
 

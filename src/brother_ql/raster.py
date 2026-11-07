@@ -63,7 +63,9 @@ class BrotherQLRaster:
         if not model_spec:
             raise BrotherQLUnknownModel(f"Unknown model: {model}")
 
-        self.model = model
+        # The canonical name, since get_model accepts any case and `_`: the P-touch row
+        # command is chosen by the name's prefix.
+        self.model = model_spec.name
         self._model_spec = model_spec
         self.data = b""
         self._pquality = True

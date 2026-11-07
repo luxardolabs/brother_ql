@@ -54,8 +54,8 @@ def position_image_on_label(
 
     # Create full-width canvas
     if im.mode == "1":
-        # For monochrome, use white background (0)
-        new_im = Image.new("1", (device_width, label_height), 0)
+        # White is 1 in mode "1"; 0 is black, which would print the margins solid.
+        new_im = Image.new("1", (device_width, label_height), 1)
     elif im.mode == "L":
         # For grayscale, use white background (255)
         new_im = Image.new("L", (device_width, label_height), 255)
