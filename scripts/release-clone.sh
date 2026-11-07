@@ -18,19 +18,29 @@ die() {
 	exit 1
 }
 
-git clone -q --no-checkout . "$dir" || die "cannot clone this repository into $dir"
+# Spelled out, so this machine's global config cannot rename the remote, refuse a local clone or seed
+# the clone's config from a template.
+git -c protocol.file.allow=always clone -q --origin origin --template= --no-checkout . "$dir" || die "cannot clone this repository into $dir"
 git -C "$dir" reset -q "$commit" || die "cannot point the clone at $commit"
 /bin/sh "$(dirname "$0")/release-export.sh" "$commit" "$dir" || exit 1
 
+# The privacy gate reads every tag, and a hideRefs setting can keep one out of a clone.
+tags=$(git for-each-ref refs/tags) || die "cannot read this repository's tags"
+cloned=$(git -C "$dir" for-each-ref refs/tags) || die "cannot read the clone's tags"
+[ "$tags" = "$cloned" ] || die "the clone does not hold this repository's tags: check transfer.hideRefs and uploadpack.hideRefs"
+
 url=$(git remote get-url origin) || die "cannot read origin's URL"
 git -C "$dir" remote set-url origin "$url" || die "cannot set the clone's origin"
-if hooks=$(git config --get core.hooksPath); then
+# --local, because the rule asks whether this repository wired its hooks, which a global value does not.
+if hooks=$(git config --local --get core.hooksPath); then
 	git -C "$dir" config core.hooksPath "$hooks" || die "cannot set the clone's core.hooksPath"
 fi
 
 for log in logs/HEAD logs/refs/heads/main; do
 	from=$(git rev-parse --git-path "$log") || die "cannot find the reflog $log"
-	[ ! -f "$from" ] && continue
+	# The clone wrote reflog entries of its own, which must not stand in for a missing one.
+	rm -f "$dir/.git/$log" || die "cannot clear the clone's reflog $log"
+	[ -f "$from" ] || continue
 	mkdir -p "$dir/.git/${log%/*}" && cp "$from" "$dir/.git/$log" || die "cannot copy the reflog $log"
 done
 

@@ -25,6 +25,7 @@ case "$*" in
 "for-each-ref refs/replace") ;;
 "remote get-url --all origin" | "remote get-url --push --all origin") echo https://github.com/luxardolabs/brother_ql.git ;;
 "config --get "*) ;;
+"config --name-only --get-regexp "*) exit 1 ;;
 "-c core.fsmonitor=false status --porcelain --untracked-files=all") ;;
 "var GIT_COMMITTER_IDENT") echo 'luxardolabs <214140984+luxardolabs@users.noreply.github.com> 1700000000 +0000' ;;
 "-c core.quotepath=off ls-tree -r HEAD") printf '100644 blob aaaa\\tVERSION\\n' ;;
@@ -161,6 +162,17 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
         ),
         ('"config --get core.sshCommand") echo evil ;;', "core.sshCommand"),
         ('"config --get remote.origin.receivepack") echo evil ;;', "receivepack"),
+        ('"config --get core.gitProxy") echo evil ;;', "core.gitProxy"),
+        # A machine in the middle needs TLS to trust it, in any spelling of the key.
+        (
+            '"config --name-only --get-regexp "*) echo http.sslverify ;;',
+            "whom git trusts",
+        ),
+        (
+            '"config --name-only --get-regexp "*) echo http.https://github.com/.sslcainfo ;;',
+            "whom git trusts",
+        ),
+        ('"config --name-only --get-regexp "*) exit 128 ;;', "git's config"),
         ('"show HEAD:VERSION") echo 1.0.0 main ;;', "X.Y.Z"),
         ('"show HEAD:VERSION") exit 128 ;;', "X.Y.Z"),
         ('"show HEAD:CHANGELOG.md") printf "## 1.0.0 - x\\n" ;;', "no notes"),
@@ -213,6 +225,10 @@ def test_each_spelling_of_this_repository_passes(tmp_path, arm):
         "https://tok3n@github.com/luxardolabs/brother_ql.git",
         "https://x-access-token:tok3n@github.com/luxardolabs/brother_ql.git",
         "tok3n@github.com:luxardolabs/brother_ql.git",
+        # A password holding a slash, a colon in an scp-style user, and a query string.
+        "https://user:tok3n/x@github.com/luxardolabs/brother_ql.git",
+        "x-access-token:tok3n@github.com:luxardolabs/brother_ql.git",
+        "https://github.com/luxardolabs/brother_ql.git?access_token=tok3n",
     ],
 )
 def test_a_refusal_does_not_print_a_token_in_the_url(tmp_path, url):
@@ -326,6 +342,15 @@ def test_a_name_that_would_change_what_the_gate_runs_is_refused(tmp_path, name):
         b"GH_REPO=attacker/other",
         b"DOCKER_HOST=tcp://attacker.invalid",
         b"LD_PRELOAD=/tmp/evil.so",
+        b"LD_AUDIT=/tmp/evil.so",
+        b"GLIBC_TUNABLES=x",
+        b"GIT_SSL_NO_VERIFY=1",
+        b"GIT_SSL_CAINFO=/tmp/evil.pem",
+        b"GIT_PROXY_COMMAND=/tmp/evil",
+        b"GIT_ASKPASS=/tmp/evil",
+        b"GIT_TRACE_REDACT=0",
+        b"GH_PATH=/tmp/evil",
+        b"GH_DEBUG=api",
         b"BASH_FUNC_make%%=() { :; }",
         b"GIT_REPLACE_REF_BASE=refs/other/",
         b"GIT_EXEC_PATH=/tmp/other",
@@ -349,6 +374,11 @@ def test_what_steers_the_release_from_the_environment_is_refused(tmp_path, varia
     "variable",
     [
         b"GIT_EDITOR=true",
+        # A proxy sees nothing while TLS still has to name github.com.
+        b"HTTPS_PROXY=http://proxy.invalid:3128",
+        # The desktop sets it, and gh's own token only says who publishes.
+        b"SSH_ASKPASS=/usr/libexec/openssh/ssh-askpass",
+        b"GH_TOKEN=tok3n",
         b"TERM=xterm",
         b"NOTES=first line\nMAKE=true",
         b"BASH_FUNC_which%%=() { :; }",
@@ -430,11 +460,12 @@ CLONE = SCRIPT.parent / "release-clone.sh"
 CLONE_GIT = """#!/bin/sh
 printf '%s\\n' "$*" >>"$CALLS"
 case "$*" in
-"clone -q --no-checkout . "*) mkdir -p "$5/.git" ;;
+"-c protocol.file.allow=always clone -q --origin origin --template= --no-checkout . "*) mkdir -p "${10}/.git/logs" && echo clone >"${10}/.git/logs/HEAD" ;;
 "-c core.quotepath=off ls-tree -r abc") printf '100644 blob a1\\tVERSION\\n' ;;
 "cat-file blob a1") printf 1.0.0 ;;
+"for-each-ref refs/tags") ;;
 "remote get-url origin") echo https://github.com/luxardolabs/brother_ql.git ;;
-"config --get core.hooksPath") echo hooks ;;
+"config --local --get core.hooksPath") echo hooks ;;
 "rev-parse --git-path logs/HEAD") echo .git/logs/HEAD ;;
 "rev-parse --git-path logs/refs/heads/main") echo .git/logs/refs/heads/main ;;
 "-C "*) ;;
@@ -494,15 +525,32 @@ def test_a_stray_file_of_the_checkout_does_not_reach_the_clone(tmp_path):
 
 
 def test_a_checkout_without_hookspath_gives_a_clone_without_it(tmp_path):
-    done, _, calls = clone(tmp_path, '"config --get core.hooksPath") exit 1 ;;\n')
+    done, _, calls = clone(
+        tmp_path, '"config --local --get core.hooksPath") exit 1 ;;\n'
+    )
     assert done.returncode == 0, done.stderr
-    assert "config core.hooksPath" not in calls
+    assert " config core.hooksPath" not in calls
+
+
+def test_a_checkout_without_a_reflog_gives_a_clone_without_one(tmp_path):
+    arm = '"rev-parse --git-path logs/HEAD") echo .git/logs/gone ;;\n'
+    done, out, _ = clone(tmp_path, arm)
+    assert done.returncode == 0, done.stderr
+    assert not (out / ".git/logs/HEAD").exists()
+
+
+def test_a_clone_missing_one_of_the_tags_is_refused(tmp_path):
+    done, _, _ = clone(tmp_path, '"for-each-ref refs/tags") echo a-personal-tag ;;\n')
+    assert done.returncode != 0
+    assert "hideRefs" in done.stderr
 
 
 @pytest.mark.parametrize(
     "arm",
     [
-        '"clone -q --no-checkout . "*) exit 128 ;;',
+        '"-c protocol.file.allow=always clone "*) exit 128 ;;',
+        '"for-each-ref refs/tags") exit 128 ;;',
+        '"-C "*" for-each-ref refs/tags") exit 128 ;;',
         '"-C "*" reset -q abc") exit 128 ;;',
         '"-c core.quotepath=off ls-tree -r abc") exit 128 ;;',
         '"remote get-url origin") exit 2 ;;',

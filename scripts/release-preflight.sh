@@ -38,7 +38,7 @@ esac
 # a tool in every recipe line, so all are refused except the few a login shell's profile exports, which
 # name no tool a recipe runs.
 [ -r "$proc/environ" ] || refuse "cannot read make's environment (Linux only)"
-steering=$(grep -zoE '^(MAKEFLAGS|GNUMAKEFLAGS|MAKEFILES|MAKEOVERRIDES|MAKE|MAKE_COMMAND|\.SHELLFLAGS|LUX_REGISTRY|LUXARCH_IMAGE|LUXLINT_IMAGE|LUXAUDIT_IMAGE|TAIL_IMAGE|GIT_IDENTITY_OK|GIT_COMMITTER_NAME|GIT_COMMITTER_EMAIL|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_GRAFT_FILE|GIT_NAMESPACE|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_CONFIG|GIT_CONFIG_[A-Z_]*|GIT_REPLACE_REF_BASE|GIT_EXEC_PATH|GIT_SSH|GIT_SSH_COMMAND|GH_REPO|GH_HOST|GH_ENTERPRISE_TOKEN|GH_CONFIG_DIR|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|LD_PRELOAD|LD_LIBRARY_PATH|GLOBIGNORE|BASHOPTS|SHELLOPTS|BASH_ENV|ENV|BASH_FUNC_[^=]*)=' "$proc/environ" | tr '\0' '\n' | grep -vE '^BASH_FUNC_(which|ml|module|switchml|scl|_module_raw)%%=$' | tr '\n' ' ')
+steering=$(grep -zoE '^(MAKEFLAGS|GNUMAKEFLAGS|MAKEFILES|MAKEOVERRIDES|MAKE|MAKE_COMMAND|\.SHELLFLAGS|LUX_REGISTRY|LUXARCH_IMAGE|LUXLINT_IMAGE|LUXAUDIT_IMAGE|TAIL_IMAGE|GIT_IDENTITY_OK|GIT_COMMITTER_NAME|GIT_COMMITTER_EMAIL|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_GRAFT_FILE|GIT_NAMESPACE|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_CONFIG|GIT_CONFIG_[A-Z_]*|GIT_REPLACE_REF_BASE|GIT_EXEC_PATH|GIT_SSH|GIT_SSH_COMMAND|GIT_SSL_[A-Z_]*|GIT_PROXY_COMMAND|GIT_ASKPASS|GIT_TRACE_REDACT|GH_REPO|GH_HOST|GH_ENTERPRISE_TOKEN|GH_CONFIG_DIR|GH_PATH|GH_DEBUG|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|LD_[A-Z_]*|GLIBC_TUNABLES|GLOBIGNORE|BASHOPTS|SHELLOPTS|BASH_ENV|ENV|BASH_FUNC_[^=]*)=' "$proc/environ" | tr '\0' '\n' | grep -vE '^BASH_FUNC_(which|ml|module|switchml|scl|_module_raw)%%=$' | tr '\n' ' ')
 [ -z "$steering" ] || refuse "the environment sets ${steering}which would steer it: unset them, and put settings in Makefile.local"
 
 # Makefiles the dirty check below cannot see. Makefile.local is gitignored, and it holds settings only.
@@ -74,7 +74,7 @@ names_this_repository() {
 }
 # A URL's user part can hold a token, and a refusal is read and pasted.
 without_user() {
-	printf '%s\n' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@#\1#; s#^[^/:]*@##'
+	printf '%s\n' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)?.*@#\1#; s/[?#].*//'
 }
 words=$IFS
 IFS='
@@ -88,9 +88,14 @@ for url in $push_urls; do
 done
 set +f
 IFS=$words
-for key in core.sshCommand remote.origin.receivepack remote.origin.uploadpack remote.origin.vcs; do
+for key in core.sshCommand core.gitProxy remote.origin.receivepack remote.origin.uploadpack remote.origin.vcs; do
 	[ -z "$(git config --get "$key" 2>/dev/null)" ] || refuse "$key is set, which changes where or how the release is pushed"
 done
+# A proxy sees nothing while TLS still has to name github.com. These change whom TLS trusts, in any
+# spelling, a URL-scoped one included, so a machine in the middle would get the refs and the token.
+trust=$(git config --name-only --get-regexp '^http\..*(sslverify|sslcainfo|sslcapath)$' 2>/dev/null)
+[ $? -le 1 ] || refuse "cannot read git's config"
+[ -z "$trust" ] || refuse "$(printf '%s\n' "$trust" | head -n 1) is set, which changes whom git trusts on the push: unset it"
 
 status=$(git -c core.fsmonitor=false status --porcelain --untracked-files=all 2>/dev/null) || refuse "git status failed: check the repository's config"
 [ -z "$status" ] || refuse "the working tree is dirty: commit first"

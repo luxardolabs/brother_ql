@@ -787,14 +787,16 @@ override BUILD_ARTIFACTS = docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOM
 # It takes no arguments, and a check reading make's own variables cannot hold that, because makefile
 # text from `--eval` rewrites them. So the first line asks scripts/release-preflight.sh, which reads how
 # make was really started. It is written out here, not in a variable, and an expansion error stops make
-# under `.IGNORE`, where a failing shell line would not. A first argument of exactly `-n` is a real dry
-# run, which no later word can undo and which is how the guards read this recipe, from a mirror that
-# need not hold the script, so it passes there. The commit judged is the commit shipped: the gate runs
-# in a fresh clone of it (scripts/release-clone.sh) and the artifacts are built from a raw export of it,
-# so no filter or ignored file can reach either, and the last line asks the preflight again before it
-# tags and pushes that commit by name. A dry run prints the gate where it stands, because a mirror need
-# not hold the script or a repository to clone. From the tag on, an interrupt keeps the notes and says
-# how to finish.
+# under `.IGNORE`, where a failing shell line would not. A first argument of exactly `-n` is how the
+# guards read this recipe, from a mirror that need not hold the script, so it passes there; a later word
+# that undoes the dry run meets the preflight on the last line, which refuses it before the tag. The
+# commit judged is the commit shipped: the gate runs in a fresh clone of it (scripts/release-clone.sh)
+# and the artifacts are built from a raw export of it, so no filter or ignored file can reach either,
+# and the last line asks the preflight again before it tags and pushes that commit by name. A dry run
+# prints the gate where it stands, because a mirror need not hold the script or a repository to clone.
+# The clone's path is made absolute so that a relative TMPDIR still names it after the cd. The sub-make
+# stays on a line of its own, whose words the guards read as make's arguments. The tag is never signed, because a signature carries the signer's address past the tagger check. From the
+# tag on, an interrupt keeps the notes and says how to finish.
 release: ## Tag, push, build and publish the GitHub Release for the VERSION file's version
 	+@$(if $(filter-out /bin/sh -c,$(SHELL) $(.SHELLFLAGS)),$(error REFUSING: SHELL or .SHELLFLAGS was changed, so make $@ cannot read how it was started))$(if $(filter ok,$(shell /usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh -c 'if [ "$$(tr "\n\0" "\001\n" <"$$1/cmdline" | sed -n 2p)" = -n ]; then echo ok; else /bin/sh scripts/release-preflight.sh "$$1"; fi' preflight /proc/$$PPID)),,$(error REFUSING: make $@ stopped: scripts/release-preflight.sh did not answer ok, and any reason it gave is above))true
 	@set -e; \
@@ -806,22 +808,22 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 	fi; \
 	[ -z "$$(git ls-remote --tags origin refs/tags/v$(RELEASE_VERSION))" ] || { echo "release: tag v$(RELEASE_VERSION) already exists on origin"; exit 1; }
 	@case '$(filter-out -%,$(firstword $(MAKEFLAGS)))' in *n*) exec $(MAKE) --no-print-directory check;; esac; \
-	set -e; D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT; trap 'rm -rf "$$D"; exit 130' INT TERM; \
+	set -e; D=$$(mktemp -d); D=$$(cd "$$D" && pwd -P); trap 'rm -rf "$$D"' EXIT; trap 'rm -rf "$$D"; exit 130' INT TERM HUP QUIT; \
 	/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-clone.sh $(RELEASE_HEAD) "$$D"; \
 	cd "$$D"; \
 	$(MAKE) --no-print-directory check
-	@set -e; D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT; trap 'rm -rf "$$D"; exit 130' INT TERM; \
+	@set -e; D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT; trap 'rm -rf "$$D"; exit 130' INT TERM HUP QUIT; \
 	/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-export.sh $(RELEASE_HEAD) "$$D"; \
 	$(call BUILD_ARTIFACTS,"$$D"); \
 	rm -rf dist; mv "$$D/dist" dist; \
 	[ "$$(ls dist | wc -l)" = 2 ] && [ -f dist/brother_ql-$(RELEASE_VERSION).tar.gz ] && ls dist/brother_ql-$(RELEASE_VERSION)-*.whl >/dev/null || { echo "release: dist/ is not the sdist and wheel of $(RELEASE_VERSION):"; ls dist; exit 1; }
-	@set -e; N=$$(mktemp); trap 'rm -f "$$N"' EXIT; trap 'rm -f "$$N"; exit 130' INT TERM; \
+	@set -e; N=$$(mktemp); trap 'rm -f "$$N"' EXIT; trap 'rm -f "$$N"; exit 130' INT TERM HUP QUIT; \
 	[ "$$(git rev-parse HEAD)" = "$(RELEASE_HEAD)" ] || { echo "release: HEAD moved during the gate, so that commit was not judged: run it again"; exit 1; }; \
 	[ "$$(/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-preflight.sh /proc/$$PPID)" = ok ] || { echo "release: the tree or its settings changed during the gate: run it again"; exit 1; }; \
 	git show $(RELEASE_HEAD):CHANGELOG.md | awk -v h='## $(RELEASE_VERSION) ' 'index($$0, h) == 1 { f = 1; next } /^## / { f = 0 } f' > "$$N"; \
 	FINISH="gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title $(RELEASE_VERSION) --notes-file '$$N' dist/*"; \
-	trap - EXIT; trap 'echo "release: interrupted after tagging. Check with: git ls-remote --tags origin. If v$(RELEASE_VERSION) arrived, finish with: $$FINISH. If not: git tag -d v$(RELEASE_VERSION)"; exit 130' INT TERM; \
-	git tag -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD) || { rm -f "$$N"; exit 1; }; \
+	trap - EXIT; trap 'echo "release: interrupted after tagging. Check with: git ls-remote --tags origin. If v$(RELEASE_VERSION) arrived, finish with: $$FINISH. If not: git tag -d v$(RELEASE_VERSION)"; exit 130' INT TERM HUP QUIT; \
+	git tag --no-sign -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD) || { rm -f "$$N"; exit 1; }; \
 	git -c push.followTags=false push --atomic origin $(RELEASE_HEAD):refs/heads/main v$(RELEASE_VERSION) || { \
 	  if ! R=$$(git ls-remote --tags origin refs/tags/v$(RELEASE_VERSION) 'refs/tags/v$(RELEASE_VERSION)^{}'); then echo "release: the push failed and origin cannot be read, so whether v$(RELEASE_VERSION) arrived is unknown. The local tag is kept. Check with: git ls-remote --tags origin. If it arrived, finish with: $$FINISH. If not: git tag -d v$(RELEASE_VERSION)"; exit 1; fi; \
 	  if [ -z "$$R" ]; then git tag -d v$(RELEASE_VERSION); rm -f "$$N"; echo "release: the push failed and v$(RELEASE_VERSION) is not on origin, so nothing was published and the local tag was removed"; exit 1; fi; \

@@ -107,8 +107,9 @@ def test_the_release_tags_the_commit_it_judged_from_what_head_holds():
     assert "RELEASE_VERSION := $(shell git show HEAD:VERSION 2>/dev/null)" in MAKEFILE
     text = "\n".join(recipe("release"))
     assert text.index("--no-print-directory check") < text.index("HEAD moved")
+    # A signature would carry the signer's address past the tagger check.
     assert (
-        'git tag -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD)'
+        'git tag --no-sign -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD)'
         in text
     )
     assert (
@@ -124,6 +125,9 @@ def test_the_gate_runs_in_a_fresh_clone_of_the_judged_commit():
     clone = gate.index('/bin/sh scripts/release-clone.sh $(RELEASE_HEAD) "$$D"')
     # The verdict is the shell's last word, and set -e stops a clone that failed from reaching it.
     assert "set -e; D=$$(mktemp -d)" in gate
+    # Absolute, so that a relative TMPDIR still names the clone after the cd.
+    assert 'D=$$(mktemp -d); D=$$(cd "$$D" && pwd -P); trap' in gate
+    # The guards read these words as make's arguments, so a closing bracket here hollows their rules.
     assert gate.endswith('cd "$$D"; $(MAKE) --no-print-directory check')
     assert clone < gate.rindex("$(MAKE)")
     assert "PATH=/usr/bin:/bin" in gate[:clone]
@@ -139,14 +143,14 @@ def test_the_artifacts_come_from_an_export_of_the_judged_commit():
     assert "git archive" not in text
     assert '$(call BUILD_ARTIFACTS,"$$D")' in text
     assert "dist/brother_ql-$(RELEASE_VERSION).tar.gz" in text
-    assert text.index("BUILD_ARTIFACTS") < text.index("git tag -a")
+    assert text.index("BUILD_ARTIFACTS") < text.index("git tag --no-sign")
 
 
 def test_the_preflight_is_asked_again_before_the_tag():
     text = "\n".join(recipe("release"))
     again = 'scripts/release-preflight.sh /proc/$$PPID)" = ok ]'
     assert again in text
-    assert text.index(again) < text.index("git tag -a")
+    assert text.index(again) < text.index("git tag --no-sign")
 
 
 def test_the_release_object_needs_the_tag_on_this_repository():
@@ -174,11 +178,12 @@ def test_gh_is_checked_before_the_gate_so_a_release_cannot_stop_half_way():
 
 def test_an_interrupt_stops_the_recipe_shell():
     text = "\n".join(recipe("release"))
-    assert "trap 'rm -f \"$$N\"; exit 130' INT TERM" in text
-    assert "trap 'rm -rf \"$$D\"; exit 130' INT TERM" in text
+    # HUP is a dropped session and QUIT a keyboard, and a clone holds Makefile.local's registry host.
+    assert "trap 'rm -f \"$$N\"; exit 130' INT TERM HUP QUIT" in text
+    assert text.count("trap 'rm -rf \"$$D\"; exit 130' INT TERM HUP QUIT") == 2
     assert "EXIT INT TERM" not in text
     # From the tag on, the notes stay for the command that finishes the Release.
-    assert text.index("trap - EXIT;") < text.index("git tag -a")
+    assert text.index("trap - EXIT;") < text.index("git tag --no-sign")
 
 
 def test_the_other_tree_refusal_cannot_be_overridden_and_spares_this_tree():
