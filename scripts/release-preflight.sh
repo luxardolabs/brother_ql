@@ -38,7 +38,7 @@ esac
 # a tool in every recipe line, so all are refused except the few a login shell's profile exports, which
 # name no tool a recipe runs.
 [ -r "$proc/environ" ] || refuse "cannot read make's environment (Linux only)"
-steering=$(grep -zoE '^(MAKEFLAGS|GNUMAKEFLAGS|MAKEFILES|MAKEOVERRIDES|MAKE|MAKE_COMMAND|\.SHELLFLAGS|LUX_REGISTRY|LUXARCH_IMAGE|LUXLINT_IMAGE|LUXAUDIT_IMAGE|TAIL_IMAGE|GIT_IDENTITY_OK|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_GRAFT_FILE|GIT_NAMESPACE|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_CONFIG|GIT_CONFIG_[A-Z_]*|GIT_REPLACE_REF_BASE|GIT_EXEC_PATH|GIT_SSH|GIT_SSH_COMMAND|GH_REPO|GH_HOST|GH_ENTERPRISE_TOKEN|GH_CONFIG_DIR|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|LD_PRELOAD|LD_LIBRARY_PATH|GLOBIGNORE|BASHOPTS|SHELLOPTS|BASH_ENV|ENV|BASH_FUNC_[^=]*)=' "$proc/environ" | tr '\0' '\n' | grep -vE '^BASH_FUNC_(which|ml|module|switchml|scl|_module_raw)%%=$' | tr '\n' ' ')
+steering=$(grep -zoE '^(MAKEFLAGS|GNUMAKEFLAGS|MAKEFILES|MAKEOVERRIDES|MAKE|MAKE_COMMAND|\.SHELLFLAGS|LUX_REGISTRY|LUXARCH_IMAGE|LUXLINT_IMAGE|LUXAUDIT_IMAGE|TAIL_IMAGE|GIT_IDENTITY_OK|GIT_COMMITTER_NAME|GIT_COMMITTER_EMAIL|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_GRAFT_FILE|GIT_NAMESPACE|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_CONFIG|GIT_CONFIG_[A-Z_]*|GIT_REPLACE_REF_BASE|GIT_EXEC_PATH|GIT_SSH|GIT_SSH_COMMAND|GH_REPO|GH_HOST|GH_ENTERPRISE_TOKEN|GH_CONFIG_DIR|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|LD_PRELOAD|LD_LIBRARY_PATH|GLOBIGNORE|BASHOPTS|SHELLOPTS|BASH_ENV|ENV|BASH_FUNC_[^=]*)=' "$proc/environ" | tr '\0' '\n' | grep -vE '^BASH_FUNC_(which|ml|module|switchml|scl|_module_raw)%%=$' | tr '\n' ' ')
 [ -z "$steering" ] || refuse "the environment sets ${steering}which would steer it: unset them, and put settings in Makefile.local"
 
 # Makefiles the dirty check below cannot see. Makefile.local is gitignored, and it holds settings only.
@@ -59,15 +59,35 @@ inside=$(git rev-parse --is-inside-work-tree 2>&1)
 replaced=$(git for-each-ref refs/replace 2>/dev/null) || refuse "cannot read refs/replace"
 [ -z "$replaced" ] || refuse "refs/replace is set, so git would read other commits than the ones it pushes"
 # --all, because git push goes to every URL a remote lists and plain get-url names only the first.
-fetch_url=$(git remote get-url --all origin 2>/dev/null) || refuse "there is no origin"
-push_url=$(git remote get-url --push --all origin 2>/dev/null) || refuse "there is no push URL for origin"
-[ "$fetch_url" = "$push_url" ] || refuse "origin pushes somewhere other than it fetches from"
-case "$fetch_url" in
-https://github.com/luxardolabs/brother_ql | https://github.com/luxardolabs/brother_ql.git) ;;
-git@github.com:luxardolabs/brother_ql | git@github.com:luxardolabs/brother_ql.git) ;;
-ssh://git@github.com/luxardolabs/brother_ql | ssh://git@github.com/luxardolabs/brother_ql.git) ;;
-*) refuse "origin is $fetch_url, and the Release goes to luxardolabs/brother_ql" ;;
-esac
+fetch_urls=$(git remote get-url --all origin 2>/dev/null) || refuse "there is no origin"
+push_urls=$(git remote get-url --push --all origin 2>/dev/null) || refuse "there is no push URL for origin"
+[ -n "$fetch_urls" ] || refuse "there is no origin"
+[ -n "$push_urls" ] || refuse "there is no push URL for origin"
+# Each URL must name this repository. Fetch and push may spell it differently, as a pushInsteadOf does.
+names_this_repository() {
+	case "$1" in
+	https://github.com/luxardolabs/brother_ql | https://github.com/luxardolabs/brother_ql.git) ;;
+	git@github.com:luxardolabs/brother_ql | git@github.com:luxardolabs/brother_ql.git) ;;
+	ssh://git@github.com/luxardolabs/brother_ql | ssh://git@github.com/luxardolabs/brother_ql.git) ;;
+	*) return 1 ;;
+	esac
+}
+# A URL's user part can hold a token, and a refusal is read and pasted.
+without_user() {
+	printf '%s\n' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@#\1#; s#^[^/:]*@##'
+}
+words=$IFS
+IFS='
+'
+set -f
+for url in $fetch_urls; do
+	names_this_repository "$url" || refuse "origin fetches from $(without_user "$url"), and the Release goes to luxardolabs/brother_ql"
+done
+for url in $push_urls; do
+	names_this_repository "$url" || refuse "origin pushes to $(without_user "$url"), and the Release goes to luxardolabs/brother_ql"
+done
+set +f
+IFS=$words
 for key in core.sshCommand remote.origin.receivepack remote.origin.uploadpack remote.origin.vcs; do
 	[ -z "$(git config --get "$key" 2>/dev/null)" ] || refuse "$key is set, which changes where or how the release is pushed"
 done
@@ -75,18 +95,8 @@ done
 status=$(git -c core.fsmonitor=false status --porcelain --untracked-files=all 2>/dev/null) || refuse "git status failed: check the repository's config"
 [ -z "$status" ] || refuse "the working tree is dirty: commit first"
 
-# A file git hides but the gate can read: the suite would pass on a file the commit does not hold.
-# Ignored files are fine when the committed root .gitignore names them.
-all_ignored=$(git ls-files -oi --exclude-standard 2>/dev/null) || refuse "cannot list ignored files"
-root_ignored=$(git ls-files -oi --exclude-from=.gitignore 2>/dev/null) || refuse "cannot list ignored files"
-[ "$all_ignored" = "$root_ignored" ] || refuse "some files are ignored by something other than the committed .gitignore (.git/info/exclude, core.excludesFile, or a nested .gitignore), so the gate reads files the commit does not hold: remove them, or commit the pattern"
-
-# Ignored files beside the code and its tests would let a suite pass on what a fresh clone lacks.
-beside=$(printf '%s\n' "$all_ignored" | grep -E '^(src|tests)/' | grep -v '__pycache__/' | head -n 1)
-[ -z "$beside" ] || refuse "$beside is ignored but sits beside the code, so the suite can read a file the commit does not hold: remove it, or commit it"
-
 # The bytes on disk are the bytes at HEAD. git status trusts its index and its config, which can both
-# hide a change, and the gate judges what is on disk.
+# hide a change, and this checkout's Makefile and scripts are what run the release.
 tree=$(git -c core.quotepath=off ls-tree -r HEAD 2>/dev/null) || refuse "cannot read the tree at HEAD"
 [ -n "$tree" ] || refuse "the tree at HEAD is empty"
 different=$(printf '%s\n' "$tree" | while IFS= read -r line; do
@@ -117,5 +127,13 @@ notes=$(git show HEAD:CHANGELOG.md 2>/dev/null | awk -v h="## $version " 'index(
 if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
 	refuse "tag v$version already exists"
 fi
+
+# The tag publishes its tagger, and a tag can only leave history by being deleted from origin. This is
+# the fleet account of GIT_IDENTITY_OK in the Makefile, whose other address is GitHub's web committer.
+tagger=$(git var GIT_COMMITTER_IDENT 2>/dev/null) || refuse "git has no identity to tag with: set the global user.name and user.email to the fleet account"
+case "$tagger" in
+"luxardolabs <214140984+luxardolabs@users.noreply.github.com> "*) ;;
+*) refuse "the tag would carry the identity ${tagger% * *}: set the global user.name and user.email to the fleet account" ;;
+esac
 
 echo ok

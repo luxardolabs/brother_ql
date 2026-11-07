@@ -789,10 +789,12 @@ override BUILD_ARTIFACTS = docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOM
 # make was really started. It is written out here, not in a variable, and an expansion error stops make
 # under `.IGNORE`, where a failing shell line would not. A first argument of exactly `-n` is a real dry
 # run, which no later word can undo and which is how the guards read this recipe, from a mirror that
-# need not hold the script, so it passes there. The commit judged is the commit shipped: the artifacts
-# are built from a raw export of it, so no filter or ignored file can reach them, and the last line
-# asks the preflight again before it tags and pushes that commit by name. From the tag on, an
-# interrupt keeps the notes and says how to finish.
+# need not hold the script, so it passes there. The commit judged is the commit shipped: the gate runs
+# in a fresh clone of it (scripts/release-clone.sh) and the artifacts are built from a raw export of it,
+# so no filter or ignored file can reach either, and the last line asks the preflight again before it
+# tags and pushes that commit by name. A dry run prints the gate where it stands, because a mirror need
+# not hold the script or a repository to clone. From the tag on, an interrupt keeps the notes and says
+# how to finish.
 release: ## Tag, push, build and publish the GitHub Release for the VERSION file's version
 	+@$(if $(filter-out /bin/sh -c,$(SHELL) $(.SHELLFLAGS)),$(error REFUSING: SHELL or .SHELLFLAGS was changed, so make $@ cannot read how it was started))$(if $(filter ok,$(shell /usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh -c 'if [ "$$(tr "\n\0" "\001\n" <"$$1/cmdline" | sed -n 2p)" = -n ]; then echo ok; else /bin/sh scripts/release-preflight.sh "$$1"; fi' preflight /proc/$$PPID)),,$(error REFUSING: make $@ stopped: scripts/release-preflight.sh did not answer ok, and any reason it gave is above))true
 	@set -e; \
@@ -803,7 +805,11 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 	  git merge-base --is-ancestor origin/main HEAD || { echo "release: origin/main has commits this checkout does not: pull first"; exit 1; }; \
 	fi; \
 	[ -z "$$(git ls-remote --tags origin refs/tags/v$(RELEASE_VERSION))" ] || { echo "release: tag v$(RELEASE_VERSION) already exists on origin"; exit 1; }
-	@$(MAKE) --no-print-directory check
+	@case '$(filter-out -%,$(firstword $(MAKEFLAGS)))' in *n*) exec $(MAKE) --no-print-directory check;; esac; \
+	set -e; D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT; trap 'rm -rf "$$D"; exit 130' INT TERM; \
+	/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-clone.sh $(RELEASE_HEAD) "$$D"; \
+	cd "$$D"; \
+	$(MAKE) --no-print-directory check
 	@set -e; D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT; trap 'rm -rf "$$D"; exit 130' INT TERM; \
 	/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-export.sh $(RELEASE_HEAD) "$$D"; \
 	$(call BUILD_ARTIFACTS,"$$D"); \

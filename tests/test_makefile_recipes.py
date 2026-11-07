@@ -117,6 +117,22 @@ def test_the_release_tags_the_commit_it_judged_from_what_head_holds():
     )
 
 
+def test_the_gate_runs_in_a_fresh_clone_of_the_judged_commit():
+    gate = next(
+        line for line in recipe("release") if "scripts/release-clone.sh" in line
+    )
+    clone = gate.index('/bin/sh scripts/release-clone.sh $(RELEASE_HEAD) "$$D"')
+    # The verdict is the shell's last word, and set -e stops a clone that failed from reaching it.
+    assert "set -e; D=$$(mktemp -d)" in gate
+    assert gate.endswith('cd "$$D"; $(MAKE) --no-print-directory check')
+    assert clone < gate.rindex("$(MAKE)")
+    assert "PATH=/usr/bin:/bin" in gate[:clone]
+    # Only a dry run judges where it stands, and it leaves before the clone.
+    assert gate.startswith(
+        "@case '$(filter-out -%,$(firstword $(MAKEFLAGS)))' in *n*) exec $(MAKE) --no-print-directory check;; esac;"
+    )
+
+
 def test_the_artifacts_come_from_an_export_of_the_judged_commit():
     text = "\n".join(recipe("release"))
     assert '/bin/sh scripts/release-export.sh $(RELEASE_HEAD) "$$D"' in text

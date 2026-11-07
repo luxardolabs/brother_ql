@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "release-preflight.sh"
+MAKEFILE = SCRIPT.parent.parent / "Makefile"
 
 
 CLEAN_GIT = """#!/bin/sh
@@ -24,8 +25,8 @@ case "$*" in
 "for-each-ref refs/replace") ;;
 "remote get-url --all origin" | "remote get-url --push --all origin") echo https://github.com/luxardolabs/brother_ql.git ;;
 "config --get "*) ;;
-"ls-files -oi --exclude-standard" | "ls-files -oi --exclude-from=.gitignore") ;;
 "-c core.fsmonitor=false status --porcelain --untracked-files=all") ;;
+"var GIT_COMMITTER_IDENT") echo 'luxardolabs <214140984+luxardolabs@users.noreply.github.com> 1700000000 +0000' ;;
 "-c core.quotepath=off ls-tree -r HEAD") printf '100644 blob aaaa\\tVERSION\\n' ;;
 "hash-object --no-filters -- VERSION") echo aaaa ;;
 "show HEAD:VERSION") echo 1.0.0 ;;
@@ -123,8 +124,25 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
         ),
         (
             '"remote get-url --all origin" | "remote get-url --push --all origin") echo /fork.git ;;',
-            "origin is",
+            "fetches from",
         ),
+        ('"remote get-url --all origin") ;;', "there is no origin"),
+        ('"remote get-url --push --all origin") ;;', "no push URL"),
+        # The tag publishes its tagger, so only the fleet account may make one.
+        (
+            "\"var GIT_COMMITTER_IDENT\") echo 'A Person <a.person@example.org> 1 +0000' ;;",
+            "a.person@example.org",
+        ),
+        # Another noreply address, and the fleet address behind another name.
+        (
+            "\"var GIT_COMMITTER_IDENT\") echo 'luxardolabs <1+other@users.noreply.github.com> 1 +0000' ;;",
+            "the tag would carry",
+        ),
+        (
+            "\"var GIT_COMMITTER_IDENT\") echo 'a.person@example.org <214140984+luxardolabs@users.noreply.github.com> 1 +0000' ;;",
+            "the tag would carry",
+        ),
+        ('"var GIT_COMMITTER_IDENT") exit 128 ;;', "no identity"),
         # git push goes to every URL listed, so one real URL and a second must not pass.
         (
             '"remote get-url --push --all origin") '
@@ -134,28 +152,15 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
         (
             '"remote get-url --all origin" | "remote get-url --push --all origin") '
             "printf 'https://github.com/luxardolabs/brother_ql.git\\n/sink.git\\n' ;;",
-            "origin is",
+            "fetches from",
         ),
         # git's own reason, such as dubious ownership, reaches the person.
         (
             '"rev-parse --is-inside-work-tree") echo "fatal: detected dubious ownership" >&2; exit 128 ;;',
             "dubious ownership",
         ),
-        (
-            '"ls-files -oi --exclude-standard" | "ls-files -oi --exclude-from=.gitignore") echo tests/lib/helper.py ;;',
-            "beside the code",
-        ),
-        (
-            '"ls-files -oi --exclude-standard" | "ls-files -oi --exclude-from=.gitignore") echo src/brother_ql/_local.py ;;',
-            "beside the code",
-        ),
         ('"config --get core.sshCommand") echo evil ;;', "core.sshCommand"),
         ('"config --get remote.origin.receivepack") echo evil ;;', "receivepack"),
-        (
-            '"ls-files -oi --exclude-standard") echo hidden.py ;;',
-            "committed .gitignore",
-        ),
-        ('"ls-files -oi --exclude-standard") exit 128 ;;', "ignored files"),
         ('"show HEAD:VERSION") echo 1.0.0 main ;;', "X.Y.Z"),
         ('"show HEAD:VERSION") exit 128 ;;', "X.Y.Z"),
         ('"show HEAD:CHANGELOG.md") printf "## 1.0.0 - x\\n" ;;', "no notes"),
@@ -188,12 +193,55 @@ def test_makefile_local_may_hold_plain_settings_only(tmp_path, local):
     assert "Makefile.local" in said
 
 
-def test_caches_the_committed_gitignore_names_pass(tmp_path):
-    arm = (
-        '"ls-files -oi --exclude-standard" | "ls-files -oi --exclude-from=.gitignore") '
-        "printf 'tests/__pycache__/a.pyc\\nsrc/brother_ql/__pycache__/b.pyc\\n.coverage\\n' ;;\n"
+@pytest.mark.parametrize(
+    "arm",
+    [
+        # An ssh push URL beside an https fetch URL, as a global pushInsteadOf gives.
+        '"remote get-url --push --all origin") echo git@github.com:luxardolabs/brother_ql.git ;;\n',
+        '"remote get-url --all origin") echo ssh://git@github.com/luxardolabs/brother_ql ;;\n',
+        # Two spellings of this repository, both pushed to.
+        "\"remote get-url --push --all origin\") printf 'https://github.com/luxardolabs/brother_ql\\ngit@github.com:luxardolabs/brother_ql\\n' ;;\n",
+    ],
+)
+def test_each_spelling_of_this_repository_passes(tmp_path, arm):
+    assert preflight(tmp_path, ["make", "release"], git_answers=arm) == ("ok", "")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://tok3n@github.com/luxardolabs/brother_ql.git",
+        "https://x-access-token:tok3n@github.com/luxardolabs/brother_ql.git",
+        "tok3n@github.com:luxardolabs/brother_ql.git",
+    ],
+)
+def test_a_refusal_does_not_print_a_token_in_the_url(tmp_path, url):
+    arm = f'"remote get-url --push --all origin") echo {url} ;;\n'
+    word, said = preflight(tmp_path, ["make", "release"], git_answers=arm)
+    assert word == "refused"
+    assert "origin pushes to" in said
+    assert "github.com" in said
+    assert "tok3n" not in said
+
+
+def test_ignored_files_do_not_stop_a_release_because_the_gate_never_reads_them(
+    tmp_path,
+):
+    (tmp_path / "coverage.pyc").write_bytes(b"not the commit's")
+    assert preflight(tmp_path, ["make", "release"]) == ("ok", "")
+
+
+def test_the_tagger_is_the_fleet_account_the_privacy_gate_allows():
+    allowed = next(
+        line
+        for line in MAKEFILE.read_text().splitlines()
+        if line.startswith("GIT_IDENTITY_OK ?=")
     )
-    assert preflight(tmp_path, ["make", "release"], git_answers=arm)[0] == "ok"
+    assert r"<214140984\+luxardolabs@users\.noreply\.github\.com>" in allowed
+    assert (
+        '"luxardolabs <214140984+luxardolabs@users.noreply.github.com> "*'
+        in SCRIPT.read_text()
+    )
 
 
 @pytest.mark.parametrize(
@@ -270,6 +318,8 @@ def test_a_name_that_would_change_what_the_gate_runs_is_refused(tmp_path, name):
         b"TAIL_IMAGE=attacker/python:evil",
         b"LUX_REGISTRY=attacker.invalid",
         b"LUXLINT_IMAGE=attacker/luxlint:1",
+        b"GIT_COMMITTER_NAME=a.person",
+        b"GIT_COMMITTER_EMAIL=a.person@example.org",
         b"GIT_DIR=/tmp/other",
         b"GIT_WORK_TREE=/tmp/other",
         b"GIT_CONFIG_COUNT=1",
@@ -372,3 +422,94 @@ def test_the_export_writes_each_blob_with_its_mode(tmp_path):
 )
 def test_an_export_it_cannot_finish_fails(tmp_path, listing):
     assert export(tmp_path, listing, {"a1": "one"})[0] != 0
+
+
+CLONE = SCRIPT.parent / "release-clone.sh"
+
+# Answers as this checkout would: a clone writes .git into its directory, and the rest is logged.
+CLONE_GIT = """#!/bin/sh
+printf '%s\\n' "$*" >>"$CALLS"
+case "$*" in
+"clone -q --no-checkout . "*) mkdir -p "$5/.git" ;;
+"-c core.quotepath=off ls-tree -r abc") printf '100644 blob a1\\tVERSION\\n' ;;
+"cat-file blob a1") printf 1.0.0 ;;
+"remote get-url origin") echo https://github.com/luxardolabs/brother_ql.git ;;
+"config --get core.hooksPath") echo hooks ;;
+"rev-parse --git-path logs/HEAD") echo .git/logs/HEAD ;;
+"rev-parse --git-path logs/refs/heads/main") echo .git/logs/refs/heads/main ;;
+"-C "*) ;;
+*) echo "unexpected: git $*" >&2; exit 99 ;;
+esac
+"""
+
+
+def clone(tmp_path, arms=""):
+    """Run the clone script on a stand-in checkout, and return (result, directory, git's calls)."""
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "git").write_text(
+        CLONE_GIT.replace('case "$*" in\n', f'case "$*" in\n{arms}')
+    )
+    (tools / "git").chmod(0o755)
+    here = tmp_path / "here"
+    (here / ".git/logs/refs/heads").mkdir(parents=True)
+    (here / ".git/logs/HEAD").write_text("head history\n")
+    (here / ".git/logs/refs/heads/main").write_text("main history\n")
+    (here / ".claude").mkdir()
+    (here / ".claude/.hooks-heartbeat").write_text("beat\n")
+    (here / "Makefile.local").write_text("LUX_REGISTRY = r\n")
+    (here / "coverage.pyc").write_bytes(b"not the commit's")
+    out = tmp_path / "out"
+    out.mkdir()
+    calls = tmp_path / "calls"
+    done = subprocess.run(
+        ["/bin/sh", str(CLONE), "abc", str(out)],
+        capture_output=True,
+        text=True,
+        cwd=here,
+        env={"PATH": f"{tools}:/usr/bin:/bin", "LC_ALL": "C", "CALLS": str(calls)},
+    )
+    return done, out, calls.read_text()
+
+
+def test_the_clone_holds_the_commit_and_the_state_the_guards_read(tmp_path):
+    done, out, calls = clone(tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert (out / "VERSION").read_text() == "1.0.0"
+    assert (out / ".git/logs/HEAD").read_text() == "head history\n"
+    assert (out / ".git/logs/refs/heads/main").read_text() == "main history\n"
+    assert (out / ".claude/.hooks-heartbeat").read_text() == "beat\n"
+    assert (out / "Makefile.local").read_text() == "LUX_REGISTRY = r\n"
+    assert f"-C {out} reset -q abc" in calls
+    assert (
+        f"-C {out} remote set-url origin https://github.com/luxardolabs/brother_ql.git"
+        in calls
+    )
+    assert f"-C {out} config core.hooksPath hooks" in calls
+
+
+def test_a_stray_file_of_the_checkout_does_not_reach_the_clone(tmp_path):
+    _, out, _ = clone(tmp_path)
+    assert not (out / "coverage.pyc").exists()
+
+
+def test_a_checkout_without_hookspath_gives_a_clone_without_it(tmp_path):
+    done, _, calls = clone(tmp_path, '"config --get core.hooksPath") exit 1 ;;\n')
+    assert done.returncode == 0, done.stderr
+    assert "config core.hooksPath" not in calls
+
+
+@pytest.mark.parametrize(
+    "arm",
+    [
+        '"clone -q --no-checkout . "*) exit 128 ;;',
+        '"-C "*" reset -q abc") exit 128 ;;',
+        '"-c core.quotepath=off ls-tree -r abc") exit 128 ;;',
+        '"remote get-url origin") exit 2 ;;',
+        '"-C "*" remote set-url origin "*) exit 2 ;;',
+        '"-C "*" config core.hooksPath hooks") exit 2 ;;',
+        '"rev-parse --git-path logs/HEAD") exit 128 ;;',
+    ],
+)
+def test_a_clone_it_cannot_finish_fails(tmp_path, arm):
+    assert clone(tmp_path, arm + "\n")[0].returncode != 0
