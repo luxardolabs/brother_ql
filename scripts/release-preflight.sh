@@ -88,8 +88,8 @@ names_this_repository() {
 trusts_as_usual() {
 	http=$(git config --get-urlmatch http "$1" 2>/dev/null)
 	[ $? -le 1 ] || refuse "cannot read git's config"
-	trust=$(printf '%s\n' "$http" | grep -E '^http\.(sslverify|sslcainfo|sslcapath) ' | grep -vE '^http\.sslverify (true|yes|on|1)$' | head -n 1 | cut -d' ' -f1)
-	[ -z "$trust" ] || refuse "$trust is set for github.com, which changes whom git trusts on the push: unset it"
+	trust=$(printf '%s\n' "$http" | grep -E '^http\.(sslverify|sslcainfo|sslcapath|extraheader) ' | grep -vE '^http\.sslverify (true|yes|on|1)$' | head -n 1 | cut -d' ' -f1)
+	[ -z "$trust" ] || refuse "$trust is set for github.com, which changes whom git trusts or what it sends on the push: unset it"
 }
 # A refusal names no URL: any part of one can hold a token, and a refusal is read and pasted.
 words=$IFS
@@ -97,22 +97,31 @@ IFS='
 '
 set -f
 for url in $fetch_urls; do
-	names_this_repository "$url" || refuse "origin's fetch URL is not https://github.com/luxardolabs/brother_ql, where the Release goes: see git remote -v"
+	names_this_repository "$url" || refuse "origin's fetch URL is not https://github.com/luxardolabs/brother_ql, where the Release goes, and a release does not use ssh: see git remote -v"
 	trusts_as_usual "$url"
 done
 for url in $push_urls; do
-	names_this_repository "$url" || refuse "origin's push URL is not https://github.com/luxardolabs/brother_ql, where the Release goes: see git remote -v"
+	names_this_repository "$url" || refuse "origin's push URL is not https://github.com/luxardolabs/brother_ql, where the Release goes, and a release does not use ssh: see git remote -v"
 	trusts_as_usual "$url"
 done
 set +f
 IFS=$words
-# A hook set in config runs inside the push beside the committed ones, and holds the token.
-hooks=$(git config --name-only --get-regexp '^hook\.' 2>/dev/null)
+# The hooks that run in the tag and the push are the commit's, from the place the guards judged.
+[ "$(git config --get core.hooksPath 2>/dev/null)" = hooks ] || refuse "core.hooksPath is not hooks, so the committed hooks would not run on the push: git config core.hooksPath hooks"
+stray=$(git ls-files --others -- hooks 2>/dev/null) || refuse "cannot list hooks/"
+[ -z "$stray" ] || refuse "hooks/ holds a file the commit does not: git would run it in the tag or the push, so remove it"
+# Settings that run a hook, record the token's variable, or change who the push authenticates as. A name
+# can hold a URL, so a refusal names only its section.
+settings=$(git config --name-only --get-regexp '^(hook\..*|trace2\..*|credential\.(.*\.)?username)$' 2>/dev/null)
 [ $? -le 1 ] || refuse "cannot read git's config"
-[ -z "$hooks" ] || refuse "$(printf '%s\n' "$hooks" | head -n 1 | cut -d. -f1-2) is set, which runs a hook the commit does not hold: unset it"
-for key in core.gitProxy remote.origin.receivepack remote.origin.uploadpack remote.origin.vcs; do
+[ -z "$settings" ] || refuse "git's config holds a $(printf '%s\n' "$settings" | head -n 1 | cut -d. -f1) setting that the push would act on: unset it"
+for key in core.gitProxy core.fsmonitor core.alternateRefsCommand core.askPass remote.origin.receivepack remote.origin.uploadpack remote.origin.vcs; do
 	[ -z "$(git config --get "$key" 2>/dev/null)" ] || refuse "$key is set, which changes where or how the release is pushed"
 done
+# curl reads this before git asks gh, so the push would authenticate as whoever it names.
+if [ -f "${HOME:-}/.netrc" ] && grep -q github.com "$HOME/.netrc"; then
+	refuse "~/.netrc names github.com, so the push would use it instead of gh's token: remove that entry"
+fi
 
 status=$(git -c core.fsmonitor=false status --porcelain --untracked-files=all 2>/dev/null) || refuse "git status failed: check the repository's config"
 [ -z "$status" ] || refuse "the working tree is dirty: commit first"

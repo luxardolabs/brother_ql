@@ -24,9 +24,11 @@ case "$*" in
 "symbolic-ref -q HEAD") echo refs/heads/main ;;
 "for-each-ref refs/replace") ;;
 "remote get-url --all origin" | "remote get-url --push --all origin") echo https://github.com/luxardolabs/brother_ql.git ;;
+"config --get core.hooksPath") echo hooks ;;
 "config --get "*) ;;
+"ls-files --others -- hooks") ;;
 "config --get-urlmatch http "*) exit 1 ;;
-"config --name-only --get-regexp ^hook\\\\.") exit 1 ;;
+"config --name-only --get-regexp "*) exit 1 ;;
 "rev-parse --path-format=absolute --git-dir" | "rev-parse --path-format=absolute --git-common-dir") echo /r/.git ;;
 "-c core.fsmonitor=false status --porcelain --untracked-files=all") ;;
 "var GIT_COMMITTER_IDENT") echo 'luxardolabs <214140984+luxardolabs@users.noreply.github.com> 1700000000 +0000' ;;
@@ -68,7 +70,7 @@ def preflight(
         text=True,
         cwd=tmp_path,
         check=True,
-        env={"PATH": f"{tools}:/usr/bin:/bin", "LC_ALL": "C"},
+        env={"PATH": f"{tools}:/usr/bin:/bin", "LC_ALL": "C", "HOME": str(tmp_path)},
     )
     return done.stdout.strip(), done.stderr
 
@@ -164,10 +166,38 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
         ),
         # A hook set in config runs inside the push and holds the token.
         (
-            '"config --name-only --get-regexp ^hook\\\\.") echo hook.x.event ;;',
-            "hook.x is set",
+            '"config --name-only --get-regexp "*) echo hook.x.event ;;',
+            "a hook setting",
         ),
-        ('"config --name-only --get-regexp ^hook\\\\.") exit 128 ;;', "git's config"),
+        # Records the token's variable, and diverts who the push authenticates as.
+        (
+            '"config --name-only --get-regexp "*) echo trace2.envvars ;;',
+            "a trace2 setting",
+        ),
+        (
+            '"config --name-only --get-regexp "*) echo credential.username ;;',
+            "a credential setting",
+        ),
+        ('"config --name-only --get-regexp "*) exit 128 ;;', "git's config"),
+        # The hooks that run in the push are the commit's, from where the guards look.
+        ('"config --get core.hooksPath") ;;', "core.hooksPath"),
+        ('"config --get core.hooksPath") echo /tmp/planted ;;', "core.hooksPath"),
+        (
+            '"ls-files --others -- hooks") echo hooks/reference-transaction ;;',
+            "hooks/ holds a file",
+        ),
+        ('"ls-files --others -- hooks") exit 128 ;;', "hooks/"),
+        # Each runs code inside the git that holds the token.
+        ('"config --get core.fsmonitor") echo /tmp/planted ;;', "core.fsmonitor"),
+        (
+            '"config --get core.alternateRefsCommand") echo /tmp/planted ;;',
+            "core.alternateRefsCommand",
+        ),
+        ('"config --get core.askPass") echo /tmp/planted ;;', "core.askPass"),
+        (
+            "\"config --get-urlmatch http \"*) echo 'http.extraheader Authorization: x' ;;",
+            "what it sends",
+        ),
         # ~/.ssh/config can send ssh to another host or run a command, so https is all a release uses.
         (
             '"remote get-url --push --all origin") echo git@github.com:luxardolabs/brother_ql.git ;;',
@@ -294,6 +324,20 @@ def test_a_refusal_does_not_print_a_token_in_the_url(tmp_path, url):
 def test_git_settings_that_leave_tls_trust_alone_pass(tmp_path, line):
     arm = f'"config --get-urlmatch http "*) {line} ;;\n'
     assert preflight(tmp_path, ["make", "release"], git_answers=arm) == ("ok", "")
+
+
+def test_a_netrc_naming_github_is_refused_and_another_host_is_not(tmp_path):
+    netrc = tmp_path / ".netrc"
+    netrc.write_text("machine git.internal.invalid login a password b\n")
+    assert preflight(tmp_path, ["make", "release"]) == ("ok", "")
+    netrc.write_text("machine github.com login a password s3cret\n")
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / ".netrc").write_text(netrc.read_text())
+    word, said = preflight(other, ["make", "release"])
+    assert word == "refused"
+    assert ".netrc" in said
+    assert "s3cret" not in said
 
 
 RUN = SCRIPT.parent / "release-run.sh"

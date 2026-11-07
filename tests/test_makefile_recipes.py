@@ -118,6 +118,13 @@ def test_the_release_tags_the_commit_it_judged_from_what_head_holds():
     )
 
 
+def test_the_tag_is_read_back_before_anything_is_pushed():
+    text = "\n".join(recipe("release"))
+    check = '[ "$$(git rev-parse \'refs/tags/v$(RELEASE_VERSION)^{commit}\')" = "$(RELEASE_HEAD)" ]'
+    assert text.index("git tag --no-sign") < text.index(check)
+    assert text.index(check) < text.index("-c push.followTags=false push")
+
+
 def test_the_gate_runs_in_a_fresh_clone_of_the_judged_commit():
     gate = next(
         line for line in recipe("release") if "scripts/release-clone.sh" in line
@@ -148,7 +155,7 @@ def test_every_line_that_talks_to_github_or_tags_runs_under_the_allowance():
         assert f"$(RELEASE_RUN) {command}" in text, command
     # A helper in any config would be handed the token: the empty value clears them all first.
     assert definition("RELEASE_GIT") == (
-        "override RELEASE_GIT = $(RELEASE_RUN) git -c credential.helper= "
+        "override RELEASE_GIT = $(RELEASE_RUN) git --no-pager -c credential.helper= "
         "-c 'credential.helper=!gh auth git-credential'"
     )
     assert "$(RELEASE_GIT) fetch -q origin" in text

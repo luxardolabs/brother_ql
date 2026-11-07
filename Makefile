@@ -781,7 +781,7 @@ override RELEASE_SIGNALS = INT TERM HUP QUIT USR1 USR2 ALRM PIPE XCPU VTALRM
 # Every line that talks to GitHub or makes the tag runs with only the environment this script names.
 override RELEASE_RUN = /bin/sh scripts/release-run.sh
 # git, reaching GitHub: an empty value clears every helper config set, so only gh's token is offered.
-override RELEASE_GIT = $(RELEASE_RUN) git -c credential.helper= -c 'credential.helper=!gh auth git-credential'
+override RELEASE_GIT = $(RELEASE_RUN) git --no-pager -c credential.helper= -c 'credential.helper=!gh auth git-credential'
 # Asked at the start and again before the tag, since gh would send its token to that socket.
 override RELEASE_GH_SOCKET = [ -z "$$($(RELEASE_RUN) gh config get http_unix_socket 2>/dev/null)" ] || { echo "release: gh's http_unix_socket is set, which sends gh's token to that socket: unset it"; exit 1; }
 
@@ -834,6 +834,7 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 	FINISH="$(RELEASE_RUN) gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title $(RELEASE_VERSION) --notes-file '$$N' dist/*"; \
 	trap - EXIT; trap 'echo "release: interrupted after tagging. Check with: $(RELEASE_RUN) git ls-remote --tags origin. If v$(RELEASE_VERSION) arrived, finish with: $$FINISH. If not: git tag -d v$(RELEASE_VERSION)"; exit 130' $(RELEASE_SIGNALS); \
 	$(RELEASE_RUN) git tag --no-sign --cleanup=verbatim -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD) || { rm -f "$$N"; exit 1; }; \
+	[ "$$(git rev-parse 'refs/tags/v$(RELEASE_VERSION)^{commit}')" = "$(RELEASE_HEAD)" ] || { echo "release: the tag v$(RELEASE_VERSION) does not name the judged commit, and nothing was pushed. Compare them, then: git tag -d v$(RELEASE_VERSION)"; rm -f "$$N"; exit 1; }; \
 	$(RELEASE_GIT) -c push.followTags=false push --atomic origin $(RELEASE_HEAD):refs/heads/main v$(RELEASE_VERSION) || { \
 	  if ! R=$$($(RELEASE_GIT) ls-remote --tags origin refs/tags/v$(RELEASE_VERSION) 'refs/tags/v$(RELEASE_VERSION)^{}'); then echo "release: the push failed and origin cannot be read, so whether v$(RELEASE_VERSION) arrived is unknown. The local tag is kept. Check with: $(RELEASE_RUN) git ls-remote --tags origin. If it arrived, finish with: $$FINISH. If not: git tag -d v$(RELEASE_VERSION)"; exit 1; fi; \
 	  if [ -z "$$R" ]; then git tag -d v$(RELEASE_VERSION); rm -f "$$N"; echo "release: the push failed and v$(RELEASE_VERSION) is not on origin, so nothing was published and the local tag was removed"; exit 1; fi; \
