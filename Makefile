@@ -44,7 +44,7 @@ LUX_REGISTRY ?=
 # trails the published :latest (it is the first step of `make check`), and
 # `make guard-upgrade` bumps every pin and prints what newly bites. Keep the `:=` form —
 # guard-upgrade's sed rewrites exactly these three lines.
-LUXARCH_VERSION  := 0.349.0
+LUXARCH_VERSION  := 0.350.0
 LUXLINT_VERSION  := 0.75.0
 LUXAUDIT_VERSION := 0.17.0
 
