@@ -44,7 +44,7 @@ LUX_REGISTRY ?=
 # trails the published :latest (it is the first step of `make check`), and
 # `make guard-upgrade` bumps every pin and prints what newly bites. Keep the `:=` form —
 # guard-upgrade's sed rewrites exactly these three lines.
-LUXARCH_VERSION  := 0.351.0
+LUXARCH_VERSION  := 0.352.0
 LUXLINT_VERSION  := 0.75.0
 LUXAUDIT_VERSION := 0.17.0
 
@@ -891,21 +891,22 @@ guard-version-check: ## FATAL: fail if any guard pin is behind the published :la
 	  fi; \
 	done; exit $$rc
 
-# luxarch:guard-upgrade asset v5 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit guard-upgrade`.
+# luxarch:guard-upgrade asset v6 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit guard-upgrade`.
 # Bumps each guard pin to its latest release and prints the rules the new luxarch adds (`--new-rules`).
 # The preview mounts `$(CURDIR)`, this makefile's directory, whatever directory `make -C` ran from.
 # Latest is the registry's `:latest`, or with REGISTRY empty (guards loaded from the release tarball)
 # the highest released `<guard>:X.Y.Z` on this machine, never `:local`. The pin is rewritten with `sed`
 # into a temporary file beside the Makefile (its mode copied first), renamed over it (`mv`, one atomic
 # step: a failed write leaves the Makefile as it was), then read back: the same on macOS and Linux.
-# A guard whose latest cannot be read is named and fails the run: "all pins already at latest" is
-# printed only when every guard was read.
+# A guard whose latest cannot be read, or whose `:latest` could not be pulled (a copy cached here may
+# be behind), is named and fails the run: "all pins already at latest" is printed only when every
+# guard was read.
 guard-upgrade:  ## Bump every guard pin to the published latest (prints what newly bites)
 	@unread=; checked=; bumped=; for g in luxarch luxlint luxaudit; do \
 	  if [ -n "$(REGISTRY)" ]; then \
 	    img=$(REGISTRY)/luxardolabs/$$g; src="$$img:latest"; \
-	    docker pull -q $$img:latest >/dev/null 2>&1 || true; \
-	    latest=$$(docker run --rm $$img:latest --version 2>/dev/null | awk '{print $$2}'); \
+	    if docker pull -q $$img:latest >/dev/null 2>&1; then latest=$$(docker run --rm $$img:latest --version 2>/dev/null | awk '{print $$2}'); \
+	    else latest=; src="$$img:latest (the pull failed, and a copy cached here may be behind)"; fi; \
 	  else \
 	    img=$$g; src="a released $$g:X.Y.Z image on this machine (REGISTRY is empty)"; \
 	    latest=$$(docker images --format '{{.Tag}}' $$g 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1); \
