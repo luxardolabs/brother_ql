@@ -424,8 +424,11 @@ def test_a_version_refusal_does_not_print_the_file(tmp_path):
     assert "s3cret" not in said
 
 
-@pytest.mark.parametrize("value", ["false", "FALSE", "no", "off", "0"])
-def test_core_fsmonitor_turned_off_passes(tmp_path, value):
+@pytest.mark.parametrize(
+    "value", ["false", "FALSE", "no", "off", "0", "true", "TRUE", "yes", "on", "1"]
+)
+def test_core_fsmonitor_as_a_boolean_passes(tmp_path, value):
+    # true is git's own daemon, as scalar sets it, and false turns it off: neither runs a hook.
     arm = f'"config --get core.fsmonitor") echo {value} ;;\n'
     assert preflight(tmp_path, ["make", "release"], git_answers=arm) == ("ok", "")
 
@@ -470,6 +473,7 @@ printf '%s\\n' "$*" >>CALLS_FILE
 case "$*" in
 "config get http_unix_socket") ;;
 "api --hostname github.com user --jq .login") echo luxardolabs ;;
+"release create --help") echo '      --verify-tag             Abort in case the git tag doesn'"'"'t already exist' ;;
 "release create "*) ;;
 *) echo "unexpected: gh $*" >&2; exit 99 ;;
 esac
@@ -524,6 +528,7 @@ def test_gh_ready_when_signed_in_as_luxardolabs(tmp_path):
     assert calls.splitlines() == [
         "config get http_unix_socket",
         "api --hostname github.com user --jq .login",
+        "release create --help",
     ]
 
 
@@ -537,6 +542,12 @@ def test_gh_ready_when_signed_in_as_luxardolabs(tmp_path):
             "as luxardolabs",
         ),
         ('"api --hostname github.com user --jq .login") exit 1 ;;', "as luxardolabs"),
+        # A gh without --verify-tag (Ubuntu 22.04 ships 2.4.0) would push the tag, then fail.
+        (
+            "\"release create --help\") echo '      --title string   Release title' ;;",
+            "too old",
+        ),
+        ('"release create --help") exit 1 ;;', "too old"),
     ],
 )
 def test_gh_not_ready_is_refused(tmp_path, answer, reason):
@@ -585,7 +596,7 @@ def test_publish_uploads_nothing_unless_every_check_holds(tmp_path, sums, gh_ans
         sums=sums,
     )
     assert done.returncode != 0
-    assert "release create" not in calls
+    assert "release create v" not in calls
 
 
 RUN = SCRIPT.parent / "release-run.sh"

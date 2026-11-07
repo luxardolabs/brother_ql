@@ -152,7 +152,7 @@ def test_every_line_that_talks_to_github_or_tags_runs_under_the_allowance():
     # gh runs through scripts/release-gh.sh, which runs it under the same allowance.
     assert (
         definition("RELEASE_GH")
-        == "override RELEASE_GH = /bin/sh scripts/release-gh.sh"
+        == "override RELEASE_GH = /bin/sh $(CHECKOUT)/scripts/release-gh.sh"
     )
     assert "gh release create" not in text
     # A helper in any config would be handed the token: the empty value clears them all first.

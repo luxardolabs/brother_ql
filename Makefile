@@ -784,7 +784,7 @@ override RELEASE_RUN = /bin/sh scripts/release-run.sh
 override RELEASE_GIT = $(RELEASE_RUN) git --no-pager -c credential.helper= -c 'credential.helper=!gh auth git-credential'
 # gh, asked at the start, again before the tag, and by the upload itself: scripts/release-gh.sh holds the
 # checks, so the command printed for a person to finish by hand makes them too.
-override RELEASE_GH = /bin/sh scripts/release-gh.sh
+override RELEASE_GH = /bin/sh $(CHECKOUT)/scripts/release-gh.sh
 # The artifacts' checksums, recorded at the build. Before the tag the artifacts are copied to a private
 # directory and the copy is checked, so the upload is what was built though dist/ stays writable. The sums
 # are kept in git's directory, which no build writes, and replaced rather than rewritten, since a release

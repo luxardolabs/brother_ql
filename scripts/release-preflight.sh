@@ -135,8 +135,8 @@ settings=$(git config --name-only --get-regexp '^(hook|trace2)\..*$' 2>/dev/null
 [ -z "$settings" ] || refuse "git's config holds a $(printf '%s\n' "$settings" | head -n 1 | cut -d. -f1) setting that the push would act on: unset it"
 for key in core.gitProxy core.fsmonitor core.alternateRefsCommand core.askPass remote.origin.receivepack remote.origin.uploadpack remote.origin.vcs; do
 	value=$(git config --get "$key" 2>/dev/null)
-	# core.fsmonitor set to false turns the feature off.
-	[ "$key" != core.fsmonitor ] || case "$(printf '%s' "$value" | tr 'A-Z' 'a-z')" in false | no | off | 0) value= ;; esac
+	# core.fsmonitor as a boolean names git's own daemon or none; any other value is a hook command.
+	[ "$key" != core.fsmonitor ] || case "$(printf '%s' "$value" | tr 'A-Z' 'a-z')" in false | no | off | 0 | true | yes | on | 1) value= ;; esac
 	[ -z "$value" ] || refuse "$key is set, which changes where or how the release is pushed"
 done
 # curl reads this before git asks gh, so the push would authenticate as whoever it names: an entry for
