@@ -12,6 +12,7 @@
 # does, which is no more than running git and gh by hand.
 proc=$1
 
+# A refusal is read and pasted, so none prints a value it was given: any can hold a token or an address.
 refuse() {
 	printf 'release: %s\n' "$1" >&2
 	echo refused
@@ -26,19 +27,19 @@ rest=$(printf '%s\n' "$args" | tail -n +2 | tr '\n' ' ')
 # argv[0] becomes $(MAKE), which runs the gate.
 case "$argv0" in
 make | gmake | */make | */gmake) ;;
-*) refuse "make was started under the name '$argv0', which would run the gate" ;;
+*) refuse "make was started under another name, which would run the gate: run make itself" ;;
 esac
 case "$argv0" in
-*[!A-Za-z0-9_./+-]*) refuse "make's name '$argv0' holds a character that would change what \$(MAKE) runs" ;;
+*[!A-Za-z0-9_./+-]*) refuse "make's name holds a character that would change what \$(MAKE) runs" ;;
 esac
 
-[ "$rest" = "release " ] || refuse "takes no arguments (got: $rest). Run it bare from the checkout, and put settings in Makefile.local"
+[ "$rest" = "release " ] || refuse "takes no arguments. Run it bare from the checkout, and put settings in Makefile.local"
 
 # What steers make, the recipe's tools or the shell, from the environment. An exported function replaces
 # a tool in every recipe line, so all are refused except the few a login shell's profile exports, which
 # name no tool a recipe runs.
 [ -r "$proc/environ" ] || refuse "cannot read make's environment (Linux only)"
-steering=$(grep -zoE '^(MAKEFLAGS|GNUMAKEFLAGS|MAKEFILES|MAKEOVERRIDES|MAKE|MAKE_COMMAND|\.SHELLFLAGS|LUX_REGISTRY|LUXARCH_IMAGE|LUXLINT_IMAGE|LUXAUDIT_IMAGE|TAIL_IMAGE|GIT_IDENTITY_OK|GIT_COMMITTER_NAME|GIT_COMMITTER_EMAIL|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_GRAFT_FILE|GIT_NAMESPACE|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_CONFIG|GIT_CONFIG_[A-Z_]*|GIT_REPLACE_REF_BASE|GIT_EXEC_PATH|GIT_SSH|GIT_SSH_COMMAND|GIT_SSL_[A-Z_]*|GIT_PROXY_COMMAND|GIT_ASKPASS|GIT_TRACE[A-Z0-9_]*|GIT_CURL_VERBOSE|GH_REPO|GH_HOST|GH_ENTERPRISE_TOKEN|GH_CONFIG_DIR|GH_PATH|GH_DEBUG|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|LD_[A-Z_]*|GLIBC_TUNABLES|GCONV_PATH|HOSTALIASES|SSL_CERT_FILE|SSL_CERT_DIR|SSLKEYLOGFILE|GLOBIGNORE|BASHOPTS|SHELLOPTS|BASH_ENV|ENV|BASH_FUNC_[^=]*)=' "$proc/environ" | tr '\0' '\n' | grep -vE '^BASH_FUNC_(which|ml|module|switchml|scl|_module_raw)%%=$' | tr '\n' ' ')
+steering=$(grep -zoE '^(MAKEFLAGS|GNUMAKEFLAGS|MAKEFILES|MAKEOVERRIDES|MAKE|MAKE_COMMAND|\.SHELLFLAGS|LUX_REGISTRY|LUXARCH_IMAGE|LUXLINT_IMAGE|LUXAUDIT_IMAGE|TAIL_IMAGE|GIT_IDENTITY_OK|GIT_COMMITTER_NAME|GIT_COMMITTER_EMAIL|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_GRAFT_FILE|GIT_NAMESPACE|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_CONFIG|GIT_CONFIG_[A-Z_]*|GIT_REPLACE_REF_BASE|GIT_EXEC_PATH|GIT_SSH|GIT_SSH_COMMAND|GIT_SSL_[A-Z_]*|GIT_PROXY_COMMAND|GIT_TRACE[A-Z0-9_]*|GIT_CURL_VERBOSE|GH_REPO|GH_HOST|GH_ENTERPRISE_TOKEN|GH_CONFIG_DIR|GH_PATH|GH_DEBUG|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|LD_[A-Z_]*|GLIBC_TUNABLES|GCONV_PATH|HOSTALIASES|SSL_CERT_FILE|SSL_CERT_DIR|SSLKEYLOGFILE|GLOBIGNORE|BASHOPTS|SHELLOPTS|BASH_ENV|ENV|BASH_FUNC_[^=]*)=' "$proc/environ" | tr '\0' '\n' | grep -vE '^BASH_FUNC_(which|ml|module|switchml|scl|_module_raw)%%=$' | tr '\n' ' ')
 [ -z "$steering" ] || refuse "the environment sets ${steering}which would steer it: unset them, and put settings in Makefile.local"
 # The gate's legs run in the clone, where a relative path names something else.
 tmpdir=$(tr '\0' '\n' <"$proc/environ" | sed -n 's/^TMPDIR=//p' | head -n 1)
@@ -90,6 +91,13 @@ trusts_as_usual() {
 	[ $? -le 1 ] || refuse "cannot read git's config"
 	trust=$(printf '%s\n' "$http" | grep -E '^http\.(sslverify|sslcainfo|sslcapath|extraheader) ' | grep -vE '^http\.sslverify (true|yes|on|1)$' | head -n 1 | cut -d' ' -f1)
 	[ -z "$trust" ] || refuse "$trust is set for github.com, which changes whom git trusts or what it sends on the push: unset it"
+	# gh's helper declines a username it does not hold, and git then asks whatever else will answer.
+	git config --get-urlmatch credential.username "$1" >/dev/null 2>&1
+	case $? in
+	0) refuse "a credential username is set for github.com, so the push would not authenticate with gh's token: unset it" ;;
+	1) ;;
+	*) refuse "cannot read git's config" ;;
+	esac
 }
 # A refusal names no URL: any part of one can hold a token, and a refusal is read and pasted.
 words=$IFS
@@ -110,17 +118,23 @@ IFS=$words
 [ "$(git config --get core.hooksPath 2>/dev/null)" = hooks ] || refuse "core.hooksPath is not hooks, so the committed hooks would not run on the push: git config core.hooksPath hooks"
 stray=$(git ls-files --others -- hooks 2>/dev/null) || refuse "cannot list hooks/"
 [ -z "$stray" ] || refuse "hooks/ holds a file the commit does not: git would run it in the tag or the push, so remove it"
-# Settings that run a hook, record the token's variable, or change who the push authenticates as. A name
-# can hold a URL, so a refusal names only its section.
-settings=$(git config --name-only --get-regexp '^(hook\..*|trace2\..*|credential\.(.*\.)?username)$' 2>/dev/null)
+# git skips a hook it cannot execute and only hints at it, so the scan of the push would not run.
+[ -x hooks/pre-push ] || refuse "hooks/pre-push is not executable, so git would skip it on the push: chmod +x hooks/pre-push"
+# Settings that run a hook or record the token's variable. A name can hold a URL, so a refusal names only
+# its section.
+settings=$(git config --name-only --get-regexp '^(hook|trace2)\..*$' 2>/dev/null)
 [ $? -le 1 ] || refuse "cannot read git's config"
 [ -z "$settings" ] || refuse "git's config holds a $(printf '%s\n' "$settings" | head -n 1 | cut -d. -f1) setting that the push would act on: unset it"
 for key in core.gitProxy core.fsmonitor core.alternateRefsCommand core.askPass remote.origin.receivepack remote.origin.uploadpack remote.origin.vcs; do
-	[ -z "$(git config --get "$key" 2>/dev/null)" ] || refuse "$key is set, which changes where or how the release is pushed"
+	value=$(git config --get "$key" 2>/dev/null)
+	# core.fsmonitor set to false turns the feature off.
+	[ "$key" != core.fsmonitor ] || case "$(printf '%s' "$value" | tr 'A-Z' 'a-z')" in false | no | off | 0) value= ;; esac
+	[ -z "$value" ] || refuse "$key is set, which changes where or how the release is pushed"
 done
-# curl reads this before git asks gh, so the push would authenticate as whoever it names.
-if [ -f "${HOME:-}/.netrc" ] && grep -q github.com "$HOME/.netrc"; then
-	refuse "~/.netrc names github.com, so the push would use it instead of gh's token: remove that entry"
+# curl reads this before git asks gh, so the push would authenticate as whoever it names: an entry for
+# github.com in any case, or a default entry, which applies to every host. Read as curl reads it, in words.
+if [ -f "${HOME:-}/.netrc" ] && tr -s ' \t\r\n' '\n\n\n\n' <"$HOME/.netrc" | tr 'A-Z' 'a-z' | awk 'previous == "machine" && $0 == "github.com" { found = 1 } $0 == "default" { found = 1 } { previous = $0 } END { exit !found }'; then
+	refuse "~/.netrc has an entry for github.com or a default one, so the push would use it instead of gh's token: remove that entry"
 fi
 
 status=$(git -c core.fsmonitor=false status --porcelain --untracked-files=all 2>/dev/null) || refuse "git status failed: check the repository's config"
@@ -158,13 +172,19 @@ notes=$(git show HEAD:CHANGELOG.md 2>/dev/null | awk -v h="## $version " 'index(
 if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
 	refuse "tag v$version already exists"
 fi
+# A version goes forward, or a merge that left VERSION behind would publish an old number on new code.
+latest=$(git for-each-ref --sort=-v:refname --format='%(refname:strip=2)' 'refs/tags/v[0-9]*' 2>/dev/null) || refuse "cannot read the tags"
+latest=$(printf '%s\n' "$latest" | head -n 1)
+if [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "${latest#v}" "$version" | sort -V | tail -n 1)" != "$version" ]; then
+	refuse "VERSION $version is not above $latest, the newest release tag"
+fi
 
 # The tag publishes its tagger, and a tag can only leave history by being deleted from origin. This is
 # the fleet account of GIT_IDENTITY_OK in the Makefile, whose other address is GitHub's web committer.
 tagger=$(git var GIT_COMMITTER_IDENT 2>/dev/null) || refuse "git has no identity to tag with: set the global user.name and user.email to the fleet account"
 case "$tagger" in
 "luxardolabs <214140984+luxardolabs@users.noreply.github.com> "*) ;;
-*) refuse "the tag would carry the identity ${tagger% * *}: set the global user.name and user.email to the fleet account" ;;
+*) refuse "the tag would carry an identity other than the fleet account's (see git var GIT_COMMITTER_IDENT): set the global user.name and user.email to the fleet account" ;;
 esac
 
 echo ok

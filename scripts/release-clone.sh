@@ -19,8 +19,9 @@ die() {
 }
 
 # Spelled out, so this machine's global config cannot rename the remote, refuse a local clone or seed
-# the clone's config from a template.
-git -c protocol.file.allow=always clone -q --origin origin --template= --no-checkout . "$dir" || die "cannot clone this repository into $dir"
+# the clone's config from a template. The preflight already read this repository, and the clone reads it
+# again by the path `<checkout>/./.git`, which a safe.directory naming the checkout does not match.
+git -c protocol.file.allow=always -c "safe.directory=$(pwd -P)/./.git" clone -q --origin origin --template= --no-checkout . "$dir" || die "cannot clone this repository into $dir"
 git -C "$dir" reset -q "$commit" || die "cannot point the clone at $commit"
 /bin/sh "$(dirname "$0")/release-export.sh" "$commit" "$dir" || exit 1
 

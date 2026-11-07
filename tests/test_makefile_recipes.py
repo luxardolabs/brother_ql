@@ -112,9 +112,10 @@ def test_the_release_tags_the_commit_it_judged_from_what_head_holds():
         'git tag --no-sign --cleanup=verbatim -a v$(RELEASE_VERSION) -m "v$(RELEASE_VERSION)" $(RELEASE_HEAD)'
         in text
     )
+    # The tag by its full name: a branch of the same name would make the short one ambiguous.
     assert (
-        "-c push.followTags=false push --atomic origin $(RELEASE_HEAD):refs/heads/main"
-        in text
+        "-c push.followTags=false push --atomic origin $(RELEASE_HEAD):refs/heads/main "
+        "refs/tags/v$(RELEASE_VERSION) ||" in text
     )
 
 
@@ -148,7 +149,6 @@ def test_every_line_that_talks_to_github_or_tags_runs_under_the_allowance():
     )
     text = "\n".join(recipe("release"))
     for command in (
-        "gh auth status",
         "git tag --no-sign",
         'gh release create v$(RELEASE_VERSION) --repo $(RELEASE_REPO) --verify-tag --title "',
     ):
@@ -200,16 +200,57 @@ def test_a_failed_push_reads_origin_before_saying_what_happened():
     assert '[ "$$P" = "$(RELEASE_HEAD)" ]' in text
 
 
-def test_gh_is_checked_before_the_gate_so_a_release_cannot_stop_half_way():
+def joined(name):
+    """A make variable's whole definition, its continuation lines joined."""
+    lines = MAKEFILE.splitlines()
+    start = next(
+        i for i, line in enumerate(lines) if line.startswith(f"override {name} =")
+    )
+    text = ""
+    for line in lines[start:]:
+        text += line.strip()
+        if not text.endswith("\\"):
+            return text
+        text = text[:-1] + " "
+    return text
+
+
+def test_gh_is_checked_before_the_gate_and_again_before_the_tag():
     text = "\n".join(recipe("release"))
     gate = text.index("--no-print-directory check")
     assert text.index("command -v gh") < gate
-    # The token would go to the socket at the first thing gh does, and the gate takes minutes.
-    assert "gh config get http_unix_socket" in definition("RELEASE_GH_SOCKET")
-    assert text.index("$(RELEASE_GH_SOCKET)") < text.index("gh auth status")
-    assert text.count("$(RELEASE_GH_SOCKET)") == 2
-    assert text.rindex("$(RELEASE_GH_SOCKET)") < text.index("git tag --no-sign")
-    assert text.index("gh auth status") < gate
+    ready = joined("RELEASE_GH_READY")
+    # The socket would take the token at the first thing gh does, so it is asked first.
+    order = [
+        "$(RELEASE_RUN) gh config get http_unix_socket",
+        # Only github.com, so an unreachable second host gh holds does not read as signed out.
+        "$(RELEASE_RUN) gh auth status --hostname github.com",
+        # The account gh is signed in as pushes and publishes.
+        '[ "$$($(RELEASE_RUN) gh api user --jq .login 2>/dev/null)" = luxardolabs ]',
+    ]
+    assert [ready.index(step) for step in order] == sorted(
+        ready.index(step) for step in order
+    )
+    # The gate takes minutes, so it is asked again before the tag.
+    assert text.index("$(RELEASE_GH_READY)") < gate
+    assert text.count("$(RELEASE_GH_READY)") == 2
+    assert text.rindex("$(RELEASE_GH_READY)") < text.index("git tag --no-sign")
+
+
+def test_dist_is_checked_against_its_build_before_the_tag_and_the_upload():
+    text = "\n".join(recipe("release"))
+    record = '( S=$(RELEASE_SUMS); cd dist && sha256sum brother_ql-$(RELEASE_VERSION)* >"$$S" )'
+    assert record in text
+    assert "sha256sum --check --quiet --strict" in joined("RELEASE_DIST_SAME")
+    assert '[ "$$(ls dist | wc -l)" = 2 ]' in joined("RELEASE_DIST_SAME")
+    checks = [
+        i for i in range(len(text)) if text.startswith("$(RELEASE_DIST_SAME) ||", i)
+    ]
+    assert len(checks) == 2
+    assert text.index(record) < checks[0] < text.index("git tag --no-sign")
+    # The last mention is the upload itself; the first is the command printed for a person.
+    upload = text.rindex("$(RELEASE_RUN) gh release create")
+    assert text.index("-c push.followTags=false push") < checks[1] < upload
 
 
 def test_an_interrupt_stops_the_recipe_shell():

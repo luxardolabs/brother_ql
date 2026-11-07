@@ -28,7 +28,9 @@ case "$*" in
 "config --get "*) ;;
 "ls-files --others -- hooks") ;;
 "config --get-urlmatch http "*) exit 1 ;;
+"config --get-urlmatch credential.username "*) exit 1 ;;
 "config --name-only --get-regexp "*) exit 1 ;;
+"for-each-ref --sort=-v:refname --format=%(refname:strip=2) refs/tags/v[0-9]*") echo v0.9.0 ;;
 "rev-parse --path-format=absolute --git-dir" | "rev-parse --path-format=absolute --git-common-dir") echo /r/.git ;;
 "-c core.fsmonitor=false status --porcelain --untracked-files=all") ;;
 "var GIT_COMMITTER_IDENT") echo 'luxardolabs <214140984+luxardolabs@users.noreply.github.com> 1700000000 +0000' ;;
@@ -59,6 +61,8 @@ def preflight(
     (proc / "environ").write_bytes(environ)
     if local is not None:
         (tmp_path / "Makefile.local").write_text(local)
+    (tmp_path / "hooks").mkdir(exist_ok=True)
+    (tmp_path / "hooks" / "pre-push").touch(mode=0o755, exist_ok=True)
     tools = tmp_path / "tools"
     tools.mkdir()
     git = tools / "git"
@@ -136,7 +140,7 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
         # The tag publishes its tagger, so only the fleet account may make one.
         (
             "\"var GIT_COMMITTER_IDENT\") echo 'A Person <a.person@example.org> 1 +0000' ;;",
-            "a.person@example.org",
+            "other than the fleet account's",
         ),
         # Another noreply address, and the fleet address behind another name.
         (
@@ -174,9 +178,25 @@ def test_a_clean_main_with_plain_settings_passes(tmp_path):
             '"config --name-only --get-regexp "*) echo trace2.envvars ;;',
             "a trace2 setting",
         ),
+        # gh's helper declines a username it does not hold, and git asks whatever else answers.
         (
-            '"config --name-only --get-regexp "*) echo credential.username ;;',
-            "a credential setting",
+            '"config --get-urlmatch credential.username "*) echo alice ;;',
+            "credential username",
+        ),
+        ('"config --get-urlmatch credential.username "*) exit 128 ;;', "git's config"),
+        # A version goes forward: a merge that left VERSION behind would publish an old number.
+        (
+            '"for-each-ref --sort=-v:refname --format=%(refname:strip=2) refs/tags/v[0-9]*") '
+            "printf 'v2.0.2\\nv1.0.0\\n' ;;",
+            "not above v2.0.2",
+        ),
+        (
+            '"for-each-ref --sort=-v:refname --format=%(refname:strip=2) refs/tags/v[0-9]*") echo v1.0.10 ;;',
+            "not above v1.0.10",
+        ),
+        (
+            '"for-each-ref --sort=-v:refname --format=%(refname:strip=2) refs/tags/v[0-9]*") exit 128 ;;',
+            "cannot read the tags",
         ),
         ('"config --name-only --get-regexp "*) exit 128 ;;', "git's config"),
         # The hooks that run in the push are the commit's, from where the guards look.
@@ -326,18 +346,74 @@ def test_git_settings_that_leave_tls_trust_alone_pass(tmp_path, line):
     assert preflight(tmp_path, ["make", "release"], git_answers=arm) == ("ok", "")
 
 
-def test_a_netrc_naming_github_is_refused_and_another_host_is_not(tmp_path):
-    netrc = tmp_path / ".netrc"
-    netrc.write_text("machine git.internal.invalid login a password b\n")
-    assert preflight(tmp_path, ["make", "release"]) == ("ok", "")
-    netrc.write_text("machine github.com login a password s3cret\n")
-    other = tmp_path / "other"
-    other.mkdir()
-    (other / ".netrc").write_text(netrc.read_text())
-    word, said = preflight(other, ["make", "release"])
+@pytest.mark.parametrize(
+    "netrc",
+    [
+        "machine github.com login a password s3cret\n",
+        # curl matches a host in any case, and a default entry applies to every host.
+        "machine GitHub.com login a password s3cret\n",
+        "default login a password s3cret\n",
+        "machine other.invalid login a password b\ndefault\nlogin a password s3cret\n",
+        "machine\tgithub.com\r\n\tlogin a\r\n\tpassword s3cret\r\n",
+    ],
+)
+def test_a_netrc_entry_curl_would_use_for_github_is_refused(tmp_path, netrc):
+    (tmp_path / ".netrc").write_text(netrc)
+    word, said = preflight(tmp_path, ["make", "release"])
     assert word == "refused"
     assert ".netrc" in said
     assert "s3cret" not in said
+
+
+@pytest.mark.parametrize(
+    "netrc",
+    [
+        "machine git.internal.invalid login a password b\n",
+        # api.github.com is another host to curl, and a comment is not an entry.
+        "machine api.github.com login a password b\n",
+        "# github.com, retired\nmachine other.invalid login a password b\n",
+    ],
+)
+def test_a_netrc_entry_for_another_host_passes(tmp_path, netrc):
+    (tmp_path / ".netrc").write_text(netrc)
+    assert preflight(tmp_path, ["make", "release"]) == ("ok", "")
+
+
+@pytest.mark.parametrize("value", ["false", "FALSE", "no", "off", "0"])
+def test_core_fsmonitor_turned_off_passes(tmp_path, value):
+    arm = f'"config --get core.fsmonitor") echo {value} ;;\n'
+    assert preflight(tmp_path, ["make", "release"], git_answers=arm) == ("ok", "")
+
+
+def test_a_pre_push_hook_git_cannot_execute_is_refused(tmp_path):
+    (tmp_path / "hooks").mkdir()
+    (tmp_path / "hooks" / "pre-push").touch(mode=0o644)
+    word, said = preflight(tmp_path, ["make", "release"])
+    assert word == "refused"
+    assert "hooks/pre-push is not executable" in said
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["make", "release", "GH_TOKEN=ghp_s3cret"],
+        ["make", "GITHUB_TOKEN=ghp_s3cret", "release"],
+        ["make", "release", "https://x:ghp_s3cret@github.com/"],
+        ["make\tghp_s3cret", "release"],
+    ],
+)
+def test_a_refusal_does_not_print_what_make_was_given(tmp_path, argv):
+    word, said = preflight(tmp_path, argv)
+    assert word == "refused"
+    assert "s3cret" not in said
+
+
+def test_a_refusal_does_not_print_the_identity_it_refuses(tmp_path):
+    arm = "\"var GIT_COMMITTER_IDENT\") echo 'A Person <a.person@example.org> 1 +0000' ;;\n"
+    word, said = preflight(tmp_path, ["make", "release"], git_answers=arm)
+    assert word == "refused"
+    assert "example.org" not in said
+    assert "A Person" not in said
 
 
 RUN = SCRIPT.parent / "release-run.sh"
@@ -546,7 +622,6 @@ def test_a_name_that_would_change_what_the_gate_runs_is_refused(tmp_path, name):
         b"GIT_SSL_NO_VERIFY=1",
         b"GIT_SSL_CAINFO=/tmp/evil.pem",
         b"GIT_PROXY_COMMAND=/tmp/evil",
-        b"GIT_ASKPASS=/tmp/evil",
         b"GIT_TRACE_REDACT=0",
         b"GIT_TRACE_CURL=1",
         b"GIT_CURL_VERBOSE=1",
@@ -580,6 +655,8 @@ def test_what_steers_the_release_from_the_environment_is_refused(tmp_path, varia
     "variable",
     [
         b"GIT_EDITOR=true",
+        # A VS Code terminal sets it, and the allowance drops it from every line that authenticates.
+        b"GIT_ASKPASS=/usr/share/code/resources/app/extensions/git/dist/askpass.sh",
         # A proxy sees nothing while TLS still has to name github.com.
         b"HTTPS_PROXY=http://proxy.invalid:3128",
         # The desktop sets it, and gh's own token only says who publishes.
@@ -666,7 +743,7 @@ CLONE = SCRIPT.parent / "release-clone.sh"
 CLONE_GIT = """#!/bin/sh
 printf '%s\\n' "$*" >>"$CALLS"
 case "$*" in
-"-c protocol.file.allow=always clone -q --origin origin --template= --no-checkout . "*) mkdir -p "${10}/.git/logs" && echo clone >"${10}/.git/logs/HEAD" ;;
+"-c protocol.file.allow=always -c safe.directory="*" clone -q --origin origin --template= --no-checkout . "*) mkdir -p "${12}/.git/logs" && echo clone >"${12}/.git/logs/HEAD" ;;
 "-c core.quotepath=off ls-tree -r abc") printf '100644 blob a1\\tVERSION\\n' ;;
 "cat-file blob a1") printf 1.0.0 ;;
 "for-each-ref refs/tags") ;;
@@ -712,6 +789,9 @@ def clone(tmp_path, arms=""):
 def test_the_clone_holds_the_commit_and_the_state_the_guards_read(tmp_path):
     done, out, calls = clone(tmp_path)
     assert done.returncode == 0, done.stderr
+    # The clone reads this repository by <checkout>/./.git, which a safe.directory naming it misses.
+    here = (tmp_path / "here").resolve()
+    assert f"-c safe.directory={here}/./.git clone -q" in calls
     assert (out / "VERSION").read_text() == "1.0.0"
     assert (out / ".git/logs/HEAD").read_text() == "head history\n"
     assert (out / ".git/logs/refs/heads/main").read_text() == "main history\n"
@@ -754,7 +834,7 @@ def test_a_clone_missing_one_of_the_tags_is_refused(tmp_path):
 @pytest.mark.parametrize(
     "arm",
     [
-        '"-c protocol.file.allow=always clone "*) exit 128 ;;',
+        '"-c protocol.file.allow=always -c safe.directory="*) exit 128 ;;',
         '"for-each-ref refs/tags") exit 128 ;;',
         '"-C "*" for-each-ref refs/tags") exit 128 ;;',
         '"-C "*" reset -q abc") exit 128 ;;',
