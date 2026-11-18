@@ -42,12 +42,33 @@ def definition(name):
     )
     found = [
         line
-        for line in MAKEFILE.splitlines()
+        for line in logical_lines()
         if assignment.match(line) and not line.startswith(("\t", "#"))
     ]
     assert len(found) == 1, f"{name} is defined {len(found)} times: {found}"
     assert found[0].startswith(f"override {name} ="), found[0]
     return found[0]
+
+
+def logical_lines():
+    """The Makefile's lines as make reads them: backslash continuations joined, blanks folded."""
+    logical, current = [], ""
+    for line in MAKEFILE.splitlines():
+        if current:
+            line = " " + line.lstrip()
+        current += line
+        if current.endswith("\\"):
+            current = current[:-1].rstrip()
+            continue
+        logical.append(current)
+        current = ""
+    return logical
+
+
+def container_command(target):
+    """A target's `docker run` up to its image, whitespace folded: what the container is given."""
+    text = "\n".join(recipe(target))
+    return " ".join(text.split("docker run", 1)[1].split("$(TAIL_IMAGE)", 1)[0].split())
 
 
 def container_steps_of(text):
@@ -87,6 +108,11 @@ def test_artifacts_are_built_by_the_hash_pinned_tools_of_the_commit():
 
 
 def test_the_suite_tests_a_wheel_the_pinned_tools_built_in_a_clean_image():
+    # The container is given nothing that could put the tree ahead of the wheel (a PYTHONPATH).
+    assert container_command("test") == (
+        '--rm $(guard_caps) -v $(CHECKOUT):/repo:ro -w /repo -v "$$D":/out'
+        " -e PYTHONDONTWRITEBYTECODE=1"
+    )
     # pip skips the hash of a requirement already installed at its pinned version, so the pinned
     # set goes in first; nothing installs the tree itself, so the suite tests that wheel alone.
     assert container_steps("test") == [
@@ -113,12 +139,10 @@ def test_the_pinned_build_set_hashes_every_requirement():
 
 
 def test_the_test_and_build_image_is_pinned_by_digest():
-    line = next(
-        line for line in MAKEFILE.splitlines() if line.startswith("TAIL_IMAGE ?= ")
-    )
-    image = line.split("?= ")[1]
-    assert image.startswith("python:3.14-slim@sha256:")
-    assert len(image.split("@sha256:")[1]) == 64
+    # One `override` definition: a later one, a target-specific one or Makefile.local cannot move
+    # the build to another image than the suite's.
+    image = definition("TAIL_IMAGE").split(" = ", 1)[1]
+    assert re.fullmatch(r"python:3\.14-slim@sha256:[0-9a-f]{64}", image), image
 
 
 def test_the_suite_holds_its_slot_in_the_recipe_shell_and_runs_capped():

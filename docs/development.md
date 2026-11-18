@@ -40,7 +40,7 @@ make test
 
 The suite builds a wheel in a throwaway container with the same pinned tools as `make build`, installs it, and runs against it, so it exercises the artifact a user would get rather than the working tree. Running `pytest` directly will not work: the canonical config requires pytest-asyncio, and the tests import `brother_ql` as an installed package.
 
-The suite is 373 tests across 14 files, covering conversion, labels and models, raster generation and the bytes a printer receives, image processing, positioning, config-override precedence, the CLI, end-to-end byte generation, the dependency floors, the release preflight script, and the text of the Makefile's recipes. The suite's image has no `make`, so the Makefile tests read its text: they pin each recipe's shape and do not run it.
+The suite is 375 tests across 15 files, covering that the package under test is the installed wheel, conversion, labels and models, raster generation and the bytes a printer receives, image processing, positioning, config-override precedence, the CLI, end-to-end byte generation, the dependency floors, the release preflight script, and the text of the Makefile's recipes. The suite's image has no `make`, so the Makefile tests read its text: they pin each recipe's shape and do not run it.
 
 The coverage floor is `[test].coverage_min = 90` in `.luxlint.toml`, set from a measured 90% branch coverage. `make test` enforces it: it runs the suite under branch coverage (`COVERAGE_CORE=sysmon`) against the installed package, then feeds `coverage report` to `luxlint --coverage-ratchet`. A failing test or coverage below the floor fails `make test`. Raise the floor when coverage rises, and never lower it.
 
@@ -71,6 +71,7 @@ tests/
 ├── test_conversion.py          # Conversion tests
 ├── test_dependency_floors.py   # Ranges admit no release with an advisory
 ├── test_image_processing.py    # Image tests
+├── test_installed_artifact.py  # The suite runs against the installed wheel
 ├── test_label_positioning.py   # Positioning tests
 ├── test_labels.py              # Label tests
 ├── test_makefile_mounts.py     # Container mounts name the checkout
@@ -88,7 +89,7 @@ tests/
 
 `requirements/audit.txt` is a compiled, audit-only pin of those ranges so the dependency scanner has concrete versions to check. Nothing installs from it. `make audit-lock` resolves the newest release each range admits (`uv pip compile --upgrade`), so run it whenever `[project].dependencies` changes and before trusting a clean `make audit`: a stale compile is a stale audit.
 
-What builds the artifacts is pinned by the commit, not chosen at build time. `requirements/build.txt` pins `build`, `hatchling` and their dependencies with hashes, compiled from `requirements/build.in` by `make build-lock`. `make build`, `make release` and `make test` install it with `--require-hashes` and build without an isolated environment, so `[build-system].requires` is never resolved from the network. The test and build image `TAIL_IMAGE` is pinned by digest, and the Makefile comment beside it says how to move it. Unlike `audit.txt` this is an install input, and `make audit` scans it too. To take a newer build tool, run `make build-lock`, then `make test` and `make build`, and commit the result.
+What builds the artifacts is pinned by the commit, not chosen at build time. `requirements/build.txt` pins `build`, `hatchling` and their dependencies with hashes, compiled from `requirements/build.in` by `make build-lock`. `make build`, `make release` and `make test` install it with `--require-hashes` and build without an isolated environment, so `[build-system].requires` is never resolved from the network. The test and build image `TAIL_IMAGE` is pinned by digest in one `override` definition, so nothing outside it can give the build another image than the suite's, and the Makefile comment beside it says how to move it. Unlike `audit.txt` this is an install input, and `make audit` scans it too. To take a newer build tool, run `make build-lock`, then `make test` and `make build`, and commit the result.
 
 ## Releases
 
