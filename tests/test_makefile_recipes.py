@@ -50,6 +50,43 @@ def test_recipes_mount_the_checkout_through_the_quoted_definition():
     )
 
 
+def test_artifacts_are_built_by_the_hash_pinned_tools_of_the_commit():
+    pin = definition("PIN_BUILD_TOOLS")
+    assert "--no-deps --require-hashes -r requirements/build.txt" in pin
+    build = definition("BUILD_ARTIFACTS")
+    assert (
+        "'$(PIN_BUILD_TOOLS) && python -m build --no-isolation --outdir dist'" in build
+    )
+    # The suite tests a wheel built by the same pinned tools, and installs nothing from the tree.
+    suite = "\n".join(recipe("test"))
+    assert (
+        "$(PIN_BUILD_TOOLS) && python -m build -q --no-isolation --wheel --outdir /tmp/wheel ."
+        in suite
+    )
+    assert "pip install -q --root-user-action=ignore /tmp/wheel/*.whl" in suite
+    assert "pip install -q --root-user-action=ignore . " not in suite
+
+
+def test_the_pinned_build_set_hashes_every_requirement():
+    text = (
+        Path(__file__).resolve().parent.parent / "requirements" / "build.txt"
+    ).read_text()
+    requirements = [line for line in text.splitlines() if line[:1].isalpha()]
+    names = {line.split("==")[0] for line in requirements}
+    assert {"build", "hatchling"} <= names
+    for line in requirements:
+        assert "==" in line and line.endswith("\\"), line
+
+
+def test_the_test_and_build_image_is_pinned_by_digest():
+    line = next(
+        line for line in MAKEFILE.splitlines() if line.startswith("TAIL_IMAGE ?= ")
+    )
+    image = line.split("?= ")[1]
+    assert image.startswith("python:3.14-slim@sha256:")
+    assert len(image.split("@sha256:")[1]) == 64
+
+
 def test_the_suite_holds_its_slot_in_the_recipe_shell_and_runs_capped():
     first = recipe("test")[0]
     assert "$(SKIP_NO_REGISTRY); $(guard_slot); D=" in first

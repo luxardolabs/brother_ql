@@ -14,7 +14,11 @@
 # from it; consumers still resolve the ranges themselves. Its age is its freshness: rerun
 # audit-lock whenever the declared dependencies change.
 #
+# requirements/build.txt is the other scanned set: the hash-pinned frontend and backend that
+# build every sdist and wheel (`make build-lock`). It is an install input, so a finding in it
+# is a finding in what builds the released artifact.
+#
 # `[python] deps = "none"` would be FALSE here (the library has real runtime dependencies)
 # and would read as a clean bill of health over an unaudited supply chain.
 [source]
-paths = ["requirements/audit.txt"]
+paths = ["requirements/audit.txt", "requirements/build.txt"]

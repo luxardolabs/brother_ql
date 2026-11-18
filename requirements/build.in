@@ -1,0 +1,4 @@
+# What builds the sdist and wheel: the frontend and the [build-system] backend.
+# `make build-lock` compiles this to requirements/build.txt with hashes.
+build
+hatchling

@@ -21,12 +21,13 @@ The guards come from a private registry, so `make check` and `make release` need
 | `make mypy`          | mypy, canonical config, mount-only                                 |
 | `make test`          | pytest against the installed package                               |
 | `make arch`          | architecture conformance                                           |
-| `make audit`         | dependency CVEs against `requirements/audit.txt`                   |
+| `make audit`         | dependency CVEs against `requirements/audit.txt` and `build.txt`   |
 | `make gitleaks`      | secret scan over the full history                                  |
 | `make format`        | apply the canonical formatter (run before committing)              |
 | `make status`        | regenerate the committed guard-status files                        |
 | `make audit-lock`    | recompile `requirements/audit.txt` to the newest admitted releases |
-| `make build`         | build the sdist + wheel                                            |
+| `make build`         | build the sdist + wheel with the pinned build tools                |
+| `make build-lock`    | recompile `requirements/build.txt` (build + hatchling, hashed)     |
 | `make release`       | the library release ritual — see [Releases](#releases)             |
 
 `make help` lists them all.
@@ -37,9 +38,9 @@ The guards come from a private registry, so `make check` and `make release` need
 make test
 ```
 
-The package is installed into a throwaway container first, so the suite exercises the artifact a user would get rather than the working tree. Running `pytest` directly will not work: the canonical config requires pytest-asyncio, and the tests import `brother_ql` as an installed package.
+The suite builds a wheel in a throwaway container with the same pinned tools as `make build`, installs it, and runs against it, so it exercises the artifact a user would get rather than the working tree. Running `pytest` directly will not work: the canonical config requires pytest-asyncio, and the tests import `brother_ql` as an installed package.
 
-The suite is 87 tests across 11 files, covering conversion, labels and models, raster generation, image processing, positioning, config-override precedence, the CLI, end-to-end byte generation, and the text of the Makefile's recipes. The suite's image has no `make`, so the Makefile tests read its text: they pin each recipe's shape and do not run it.
+The suite is 373 tests across 14 files, covering conversion, labels and models, raster generation and the bytes a printer receives, image processing, positioning, config-override precedence, the CLI, end-to-end byte generation, the dependency floors, the release preflight script, and the text of the Makefile's recipes. The suite's image has no `make`, so the Makefile tests read its text: they pin each recipe's shape and do not run it.
 
 The coverage floor is `[test].coverage_min = 90` in `.luxlint.toml`, set from a measured 90% branch coverage. `make test` enforces it: it runs the suite under branch coverage (`COVERAGE_CORE=sysmon`) against the installed package, then feeds `coverage report` to `luxlint --coverage-ratchet`. A failing test or coverage below the floor fails `make test`. Raise the floor when coverage rises, and never lower it.
 
@@ -68,6 +69,7 @@ tests/
 ├── test_cli.py                 # CLI behaviour and config discovery
 ├── test_config_overrides.py    # Merge precedence and partial overrides
 ├── test_conversion.py          # Conversion tests
+├── test_dependency_floors.py   # Ranges admit no release with an advisory
 ├── test_image_processing.py    # Image tests
 ├── test_label_positioning.py   # Positioning tests
 ├── test_labels.py              # Label tests
@@ -75,7 +77,9 @@ tests/
 ├── test_makefile_recipes.py    # The gate recipes' shape
 ├── test_models.py              # Model tests
 ├── test_print_now.py           # End-to-end byte generation
-└── test_raster.py              # Raster tests
+├── test_print_path.py          # The raster a printer receives, decoded
+├── test_raster.py              # Raster tests
+└── test_release_preflight.py   # The release preflight script, run for real
 ```
 
 ## Dependencies
@@ -83,6 +87,8 @@ tests/
 `[project].dependencies` is exactly what the package imports: `click` (CLI), `packbits` (raster compression), `Pillow` (imaging). There is no `dev` extra — the tooling comes from the pinned images. `make audit` scans the newest release each range admits, so a floor must itself exclude every release with a known advisory: `Pillow>=13.0` is the first with none, and `tests/test_dependency_floors.py` holds it there.
 
 `requirements/audit.txt` is a compiled, audit-only pin of those ranges so the dependency scanner has concrete versions to check. Nothing installs from it. `make audit-lock` resolves the newest release each range admits (`uv pip compile --upgrade`), so run it whenever `[project].dependencies` changes and before trusting a clean `make audit`: a stale compile is a stale audit.
+
+What builds the artifacts is pinned by the commit, not chosen at build time. `requirements/build.txt` pins `build`, `hatchling` and their dependencies with hashes, compiled from `requirements/build.in` by `make build-lock`. `make build`, `make release` and `make test` install it with `--require-hashes` and build without an isolated environment, so `[build-system].requires` is never resolved from the network. The test and build image `TAIL_IMAGE` is pinned by digest, and the Makefile comment beside it says how to move it. Unlike `audit.txt` this is an install input, and `make audit` scans it too. To take a newer build tool, run `make build-lock`, then `make test` and `make build`, and commit the result.
 
 ## Releases
 

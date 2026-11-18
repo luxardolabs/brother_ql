@@ -231,7 +231,10 @@ override guard_slot_body = gs_d=$$1 gs_n=$$2 gs_job=$$3; shift 3; \
 
 # The test/build base. Matches requires-python (>=3.14) and .luxlint.toml [python].target,
 # so the suite runs on the interpreter the code targets (luxarch repo.python_version_consistent).
-TAIL_IMAGE ?= python:3.14-slim
+# Pinned by digest, so the interpreter and pip that test and build an artifact are the commit's
+# choice, not the tag's on the day. To move it: `docker pull python:3.14-slim`, then put the
+# digest `docker image inspect python:3.14-slim --format '{{index .RepoDigests 0}}'` prints here.
+TAIL_IMAGE ?= python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
 
 # Keep files written by containers owned by the repo owner, not root.
 REPO_UID := $(shell id -u)
@@ -449,7 +452,8 @@ test: ## pytest against the INSTALLED package (canonical config), then the cover
 	$(GUARD_RUN) $(LUXLINT_IMAGE) --emit-config pytest > "$$D/pytest.ini" || exit 2; \
 	docker run --rm $(guard_caps) -v $(CHECKOUT):/repo:ro -w /repo -v "$$D":/out -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) \
 	  sh -c 'pip install -q --root-user-action=ignore pytest pytest-asyncio coverage >/dev/null \
-	         && pip install -q --root-user-action=ignore . >/dev/null \
+	         && $(PIN_BUILD_TOOLS) && python -m build -q --no-isolation --wheel --outdir /tmp/wheel . >/dev/null \
+	         && pip install -q --root-user-action=ignore /tmp/wheel/*.whl >/dev/null \
 	         && export COVERAGE_CORE=sysmon COVERAGE_FILE=/out/.coverage \
 	         && python -m coverage run --branch --source=brother_ql -m pytest -c /out/pytest.ini --rootdir=/repo -p no:cacheprovider \
 	         && python -m coverage report --precision=2 > /out/coverage.txt'; rc=$$?; \
@@ -1521,8 +1525,11 @@ override RELEASE_GH = /bin/sh scripts/release-gh.sh
 # run as another user leaves the file its own.
 override RELEASE_SUMS = "$$(git rev-parse --path-format=absolute --git-path release-dist.sha256)"
 
-# Builds the sdist and wheel of the tree mounted from $(1), a quoted path.
-override BUILD_ARTIFACTS = docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOME=/tmp -v $(1):/repo -w /repo $(TAIL_IMAGE) sh -c 'pip install -q --root-user-action=ignore build >/dev/null && python -m build --outdir dist'
+# Builds the sdist and wheel of the tree mounted from $(1), a quoted path, with the frontend and
+# backend the commit pins (requirements/build.txt, hash-checked) and no isolated build environment,
+# so nothing that builds an artifact is chosen from the network at build time.
+override BUILD_ARTIFACTS = docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOME=/tmp -v $(1):/repo -w /repo $(TAIL_IMAGE) sh -c '$(PIN_BUILD_TOOLS) && python -m build --no-isolation --outdir dist'
+override PIN_BUILD_TOOLS = pip install -q --root-user-action=ignore --no-deps --require-hashes -r requirements/build.txt >/dev/null
 
 # One shell per step, and `$(MAKE)` on lines of its own: make EXECUTES any line that
 # mentions $(MAKE) even under `make -n`, so a single-line recipe would really tag, push and
@@ -1587,6 +1594,13 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 
 build: ## Build the sdist + wheel in Docker (hatchling; version from VERSION)
 	$(call BUILD_ARTIFACTS,$(CHECKOUT))
+
+# Recompiles the pinned build tools from requirements/build.in, with hashes. Rerun to take a newer
+# build or hatchling, then run `make test` and `make build` on the result before committing it.
+build-lock: ## Recompile requirements/build.txt (build + hatchling, hash-pinned) from requirements/build.in
+	docker run --rm --user $(REPO_UID):$(REPO_GID) -e HOME=/tmp -v $(CHECKOUT):/repo -w /repo $(TAIL_IMAGE) \
+	  sh -c 'pip install -q --user --root-user-action=ignore uv >/dev/null \
+	         && python -m uv pip compile --upgrade --generate-hashes requirements/build.in -o requirements/build.txt'
 
 ##@ Meta
 
@@ -1670,4 +1684,4 @@ help: ## Show this help
 	  /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 	@echo
 
-.PHONY: onboard-check onboard-guards honest lint mypy arch audit audit-lock format test release build status guard-version-check guard-upgrade help
+.PHONY: onboard-check onboard-guards honest lint mypy arch audit audit-lock format test release build build-lock status guard-version-check guard-upgrade help
