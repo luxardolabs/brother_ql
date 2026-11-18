@@ -3,7 +3,7 @@ name: wrap-up
 description: Close out a piece of work the fleet way before calling it done — tests written and run for what changed, every red in touched files fixed, docs updated (stale advice removed), make check green, committed in the issue's worktree, LuxPM fully closed out (issues, checklists, activities, commit links, sync receipt), then landed on the base branch, the worktree removed, and pushed as the repo declares. Every step reports evidence, not a tick.
 ---
 
-<!-- luxarch:wrap-up-skill asset v26 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit wrap-up-skill`. -->
+<!-- luxarch:wrap-up-skill asset v27 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit wrap-up-skill`. -->
 
 # Wrap up
 
@@ -56,6 +56,7 @@ A red can also be moved instead of fixed: the code goes to another layer, helper
 
 - You are in the issue's worktree (`<repo parent>/.worktrees/<repo>/<ISSUE-KEY>`, or `.claude/worktrees/<ISSUE-KEY>` for one made before worktrees moved beside the repository; `luxarch --doc FLEET-AGENT-CONDUCT-STANDARD`, "Concurrent agents: one worktree per issue"). If the work was done in the main checkout, that is the failure the standard exists to stop: say so in the report.
 - `make check` green, run in the worktree. A red you could not fix stays red with an open escalation (`/escalate`), never deferred or silenced.
+- **In a repo whose `.luxarch.toml` declares `[agents] land = "queue"`**, the land queue runs the full gate once for every ready branch together, on the tree that lands, so you do not run `make check` or `make status`. Run the checks for what you changed instead: `luxarch --rule <id> --path <file>` for each rule that fires on a file you touched, and the touched tests (`make test-fast PYTEST_ARGS='<files>'`).
 - Commit as `luxardolabs` via the global git config (never `git -c user.email=…`), no AI attribution.
 
 **Evidence:** the `make check` result line, the commit SHA, `git status -s` empty in the worktree.
@@ -76,6 +77,7 @@ A red can also be moved instead of fixed: the code goes to another layer, helper
 
 ## 7. Land, remove the worktree, push
 
+- **In a repo that declares `[agents] land = "queue"`:** in the worktree, `python3 .claude/hooks/worktree.py ready`, not `land`. It rebases the branch and records it as ready. The queue (`python3 .claude/hooks/worktree.py queue`, run from the main checkout by the owner or the repo's lander session) gates the batch and lands it. `python3 .claude/hooks/worktree.py queue --status` shows your branch's outcome. `landed` carries the landed commits' JSON for step 6's commit links: close the issue then. `handed-back` carries the reason and the log: fix it in this worktree and run `ready` again. `stale` means you committed after `ready`: run `ready` again. Removing the worktree, below, follows `landed`.
 - In the worktree: `python3 .claude/hooks/worktree.py land`. If it rebased onto new commits (this machine's, or under `"agent"` another machine's, fetched from origin), it stops: re-run the touched tests and `make check` on the rebased code, then `land` again. A conflict stops it with nothing changed: resolve it in the worktree, re-run the gate, land.
 - Pushing follows `.luxarch.toml`. `[agents] push = "agent"`: `land` pushes the tested HEAD to origin as it lands. If origin rejected it, origin moved: run `land` again, never `git pull --rebase` on the base. `push = "owner"`: `land` stays local; say the work is landed and ready. A repo with no declaration reds `repo.agent_push_declared`: ask the owner which it is, once, and write the answer there.
 - `ExitWorktree` with `action: "keep"`, then from the main checkout `python3 .claude/hooks/worktree.py list --prune`: it prunes the worktree and its branch now that they are landed, clean, and locked by no one else. Not `ExitWorktree` `remove`: it judges the branch against the commit the worktree was made from, so it refuses every landed branch as unmerged work, and `discard_changes: true` is never the answer to that refusal.
