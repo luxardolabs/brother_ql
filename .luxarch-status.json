@@ -1,6 +1,6 @@
 {
   "guard": "luxarch",
-  "guard_version": "0.353.0",
+  "guard_version": "0.371.0",
   "repo": "/repo",
   "targets": [
     {
@@ -482,6 +482,17 @@
         "example": ""
       },
       {
+        "rule": "repo.ops_scripts_in_runbook",
+        "status": "INERT",
+        "since": "0.358.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no app-kind target: one-off operator scripts ship with an app's release",
+        "fix": "",
+        "example": ""
+      },
+      {
         "rule": "repo.github_release_wired",
         "status": "INERT",
         "since": "0.150.0",
@@ -691,6 +702,17 @@
         "example": ""
       },
       {
+        "rule": "repo.compose_pg_healthcheck_tcp",
+        "status": "INERT",
+        "since": "0.358.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "no committed compose file anywhere in the repo \u2014 nothing to check",
+        "fix": "",
+        "example": ""
+      },
+      {
         "rule": "repo.compose_up_selects_services",
         "status": "INERT",
         "since": "0.264.0",
@@ -720,6 +742,17 @@
         "deferred": false,
         "inert": true,
         "inert_reason": "not an app-kind target \u2014 no deployed stack to probe",
+        "fix": "",
+        "example": ""
+      },
+      {
+        "rule": "repo.dev_host_declared",
+        "status": "INERT",
+        "since": "0.365.0",
+        "violations": 0,
+        "deferred": false,
+        "inert": true,
+        "inert_reason": "not an app-kind target \u2014 no dev stack to place",
         "fix": "",
         "example": ""
       },
@@ -883,7 +916,7 @@
       "FAIL": 0,
       "XFAIL": 0,
       "XPASS": 0,
-      "INERT": 36
+      "INERT": 39
     }
   },
   "summary": {
@@ -891,8 +924,8 @@
     "FAIL": 0,
     "XFAIL": 0,
     "XPASS": 0,
-    "INERT": 36
+    "INERT": 39
   },
-  "commit": "96a3fde7f8a7c7b3848f786246d45c0071a99ede",
-  "generated_at": "2026-11-07T17:50:58Z"
+  "commit": "059b3ea027735c553d4008ec228d44631681bb0a",
+  "generated_at": "2026-11-18T11:40:58Z"
 }

@@ -44,9 +44,9 @@ LUX_REGISTRY ?=
 # trails the published :latest (it is the first step of `make check`), and
 # `make guard-upgrade` bumps every pin and prints what newly bites. Keep the `:=` form —
 # guard-upgrade's sed rewrites exactly these three lines.
-LUXARCH_VERSION  := 0.353.0
-LUXLINT_VERSION  := 0.75.0
-LUXAUDIT_VERSION := 0.17.0
+LUXARCH_VERSION  := 0.371.0
+LUXLINT_VERSION  := 0.79.1
+LUXAUDIT_VERSION := 0.19.0
 
 LUXARCH_IMAGE  ?= $(LUX_REGISTRY)/luxardolabs/luxarch:$(LUXARCH_VERSION)
 LUXLINT_IMAGE  ?= $(LUX_REGISTRY)/luxardolabs/luxlint:$(LUXLINT_VERSION)
@@ -56,12 +56,12 @@ LUXAUDIT_IMAGE ?= $(LUX_REGISTRY)/luxardolabs/luxaudit:$(LUXAUDIT_VERSION)
 REGISTRY = $(LUX_REGISTRY)
 LUXLINT  = $(LUXLINT_IMAGE)
 
-# luxarch:guard-run asset v8 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit guard-run`.
+# luxarch:guard-run asset v11 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit guard-run`.
 # ── GUARD_RUN: how every guard sees this checkout ───────────────────────────────────────────────────
 # Emitted by `luxarch --emit guard-run`; paste it above the targets that run the guards (`status:`, and
 # `arch:` / `lint:` / `audit:` where they run a guard image).
 #
-# Agents work in linked worktrees (`.claude/worktrees/<ISSUE-KEY>`). A worktree's `.git` is a file
+# Agents work in linked worktrees (`<repo parent>/.worktrees/<repo>/<ISSUE-KEY>`). A worktree's `.git` is a file
 # pointing into the MAIN checkout's `.git`, and the hooks keep their session state (the heartbeat) in
 # the main checkout's `.claude/`. A guard that mounts only the worktree at /repo can read neither:
 # every rule that reads git or the heartbeat goes INERT there, and `make status` run in a worktree
@@ -69,7 +69,8 @@ LUXLINT  = $(LUXLINT_IMAGE)
 # read-only, at its own path, where the worktree's `.git` file points. In the main checkout itself
 # there is nothing more to mount. Not covered: a worktree whose `.git` names its gitdir by a RELATIVE
 # path (`worktree.useRelativePaths`), which resolves from /repo to somewhere else; its git-reading
-# rules stay INERT. Claude Code writes absolute pointers.
+# rules stay INERT. The worktree hook makes worktrees with `git worktree add`, which writes absolute
+# pointers unless that setting is on. A worktree beside the repository gets the same two mounts.
 # The main checkout is mounted only from a linked worktree: git's own directory differs from the
 # common one. A plain subdirectory of a checkout is not a worktree and gets no second mount. A
 # worktree of a submodule or of a bare repository has a common directory not named `.git`: that
@@ -90,7 +91,7 @@ override GUARD_MAIN := $(if $(filter command,$(origin GUARD_MAIN)),$(GUARD_MAIN)
 # sub-make at its own MAKELEVEL) were refused at the first sub-make, so a correctly wired repo read
 # red. The block's own variables are set with `override` and never
 # exported, so neither `make -e` nor a parent's bare `export` can hand a sub-make other values.
-# Stated limits, each refused rather than misread: a `-f` path holding two spaces in a row or a tab
+# Refused rather than misread: a `-f` path holding two spaces in a row or a tab
 # (MAKEFILE_LIST collapses them: run `make -C`), and a checkout path holding `:` (docker reads it
 # as a mount option). Not refused: under `make -n`, a guard line that make runs anyway (a `+` line,
 # or one naming `$(MAKE)`) in a sub-make that inherited a command-line CURDIR.
@@ -112,6 +113,11 @@ override GUARD_RUN = guard_slot_run() ( $(guard_slot_body) $(guard_capped) ); gu
 # takes the slot and execs the client with it open), and the gate's and the suite's recipe shell
 # opens it, so every command they start inherits it. The kernel releases it when the last of them
 # exits, on a normal exit, Ctrl-C or kill -9 alike: there is no cleanup step and nothing goes stale.
+# A guard's container runs under the docker daemon, not under the client that started it, so a kill
+# -9 of the client frees the lock while the capped container runs on. So GUARD_RUN labels the
+# container `fleet.heavy-slot=<slot file>`, and a slot whose lock is free while a running container
+# carries its label (`docker ps -q --filter label=...` lists one) counts as held: the slot stays
+# taken until that container ends (v9). Where docker cannot be asked, only the lock counts.
 # It is taken with flock(1), or where there is none (macOS) with python3's fcntl.flock on the same
 # descriptor; with neither, the job is refused, naming both.
 # The slot code runs in the recipe's own shell and holds under `set -e` there, as the fleet's
@@ -149,13 +155,13 @@ override GUARD_RUN = guard_slot_run() ( $(guard_slot_body) $(guard_capped) ); gu
 #     file, and each slot file 644 so every user can open it read-only, which is all a lock needs: two
 #     users on one machine share one cap. A slot directory or file that is a symlink, not a plain
 #     file, or unreadable is refused, naming it.
-# Stated limits: the cap counts slots 1..HEAVY_SLOTS of each caller, so a caller with a larger setting
+# The cap counts slots 1..HEAVY_SLOTS of each caller, so a caller with a larger setting
 # (or a second makefile given with `-f` that sets one) uses more slots than one with a smaller; a
 # process a job starts that outlives it (a backgrounded daemon) keeps the descriptor, and so the slot,
 # until it exits; where there is no /proc (macOS) a job started through a process that closed its
 # descriptors is not seen as nested and waits for a slot of its own; and an ancestor shell that opens
-# a held slot file on descriptor 9 by hand makes its children read as nested in that slot. Found by
-# attack round 3 and not closed: a `--rule` substring that matches many rules (`--rule .`) is taken as
+# a held slot file on descriptor 9 by hand makes its children read as nested in that slot.
+# Also as built: a `--rule` substring that matches many rules (`--rule .`) is taken as
 # targeted; a job nested through an ancestor runs unlocked from the moment it finds the ancestor's
 # lock until its own background request reaches the kernel, so an ancestor that exits in that window
 # (milliseconds; not hit unloaded in 50 tries) lets a new job share its slot; a slot file removed
@@ -187,7 +193,7 @@ HEAVY_CPUS ?=
 unexport HEAVY_SLOTS HEAVY_SLOT_DIR HEAVY_MEMORY HEAVY_CPUS guard_slot guard_slot_vals guard_slot_body guard_caps guard_capped
 override guard_caps = $(foreach v,HEAVY_MEMORY HEAVY_CPUS,$(if $(filter environment% command,$(origin $(v))),$(error REFUSING: $(v) comes from the $(origin $(v)), so the caller chose how much of this machine one heavy job may take: set it in Makefile.local)))--oom-score-adj=500 --memory='$(subst ','\'',$(HEAVY_MEMORY))' --memory-swap='$(subst ','\'',$(HEAVY_MEMORY))'$(if $(HEAVY_CPUS), --cpus='$(subst ','\'',$(HEAVY_CPUS))')
 # the run, then its exit: 137 is a SIGKILL, which for a capped container is almost always its own limit
-override guard_capped = gs_rc=0; "$$@" || gs_rc=$$?; [ "$$gs_rc" != 137 ] || echo "$$gs_job: the container was killed (exit 137), most likely at its memory cap (HEAVY_MEMORY $(HEAVY_MEMORY)): raise HEAVY_MEMORY in Makefile.local, or lower HEAVY_SLOTS so the machine has room" >&2; exit "$$gs_rc"
+override guard_capped = if [ -z "$$gs_x" ] && [ "$${1:-}" = docker ] && [ "$${2:-}" = run ]; then shift 2; set -- docker run --label "fleet.heavy-slot=$$gs_f" "$$@"; fi; gs_rc=0; "$$@" || gs_rc=$$?; [ "$$gs_rc" != 137 ] || echo "$$gs_job: the container was killed (exit 137), most likely at its memory cap (HEAVY_MEMORY $(HEAVY_MEMORY)): raise HEAVY_MEMORY in Makefile.local, or lower HEAVY_SLOTS so the machine has room" >&2; exit "$$gs_rc"
 # make's own flags are what MAKEFLAGS holds before ` -- `: a variable's value after it can read like a flag.
 override guard_space := $(subst x,,x x)
 override guard_flags = $(subst :SP:, ,$(firstword $(subst :CUT:, ,$(subst $(guard_space),:SP:,$(subst $(guard_space)--$(guard_space),:CUT:,x $(MAKEFLAGS))))))
@@ -198,6 +204,7 @@ override guard_slot_body = gs_d=$$1 gs_n=$$2 gs_job=$$3; shift 3; \
   gs_x=; gs_p=; for gs_a in "$$@"; do case "$$gs_p" in (--rule) case "$$gs_a" in (*[![:space:],]*) gs_x=1;; esac;; esac; \
     case "$$gs_a" in (--rule=*[![:space:],]*|--emit|--emit=?*|--emit-*|--doc|--doc=?*|--docs|--playbook|--playbook=?*|--version|--list-rules|--changelog|--new-rules|--coverage-ratchet|--help) gs_x=1;; esac; gs_p=$$gs_a; done; \
   gs_who() { gs_t=$$(mktemp "$$gs_d/.who.XXXXXX") && { printf "%s\n" "$$gs_job (shell pid $$$$, user $$(id -un 2>/dev/null))" > "$$gs_t"; chmod 644 "$$gs_t"; mv -f "$$gs_t" "$$gs_f.who" 2>/dev/null || rm -f "$$gs_t"; }; }; \
+  gs_busy() { command -v docker >/dev/null 2>&1 && docker ps -q --filter "label=fleet.heavy-slot=$$1" 2>/dev/null | grep -qE '^[0-9a-f]{12,64}$$'; }; \
   gs_lock() { if command -v flock >/dev/null 2>&1; then flock -n -E 75 9; else python3 -I -c "import fcntl,os,sys; sys.excepthook=lambda t,v,b: os._exit(75 if t is BlockingIOError else 2); fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)"; fi; }; \
   gs_have=; if [ -z "$$gs_x" ]; then gs_i=1; while [ "$$gs_i" -le "$$gs_n" ]; do gs_f=$$gs_d/slot.$$gs_i; \
       if [ /dev/fd/9 -ef "$$gs_f" ] && gs_lock; then gs_have=1; break; fi; gs_i=$$((gs_i + 1)); done; \
@@ -214,7 +221,7 @@ override guard_slot_body = gs_d=$$1 gs_n=$$2 gs_job=$$3; shift 3; \
         if [ ! -e "$$gs_f" ] && [ ! -L "$$gs_f" ]; then gs_t=$$(mktemp "$$gs_d/.slot.XXXXXX") && { chmod 644 "$$gs_t"; ln "$$gs_t" "$$gs_f" 2>/dev/null || :; rm -f "$$gs_t"; }; fi; \
         if [ -L "$$gs_f" ] || [ ! -f "$$gs_f" ] || [ ! -r "$$gs_f" ]; then \
           echo "REFUSING: $$gs_f is not a plain file this job can read, so the heavy-job slots cannot be counted: remove it" >&2; exit 2; fi; \
-        exec 9<"$$gs_f"; gs_r=0; gs_lock || gs_r=$$?; [ "$$gs_r" = 75 ] || break 2; gs_i=$$((gs_i + 1)); done; \
+        exec 9<"$$gs_f"; gs_r=0; gs_lock || gs_r=$$?; [ "$$gs_r" != 0 ] || ! gs_busy "$$gs_f" || gs_r=75; [ "$$gs_r" = 75 ] || break 2; gs_i=$$((gs_i + 1)); done; \
       if [ -z "$$gs_w" ]; then gs_w=0; elif [ "$$gs_w" = 0 ]; then gs_w=1; gs_h=; gs_i=1; while [ "$$gs_i" -le "$$gs_n" ]; do gs_o=; gs_f=$$gs_d/slot.$$gs_i.who; \
           if [ -f "$$gs_f" ] && [ ! -L "$$gs_f" ]; then read -r gs_o < "$$gs_f" || :; fi; gs_h="$$gs_h$${gs_h:+; }$${gs_o:-slot $$gs_i: holder unknown}"; gs_i=$$((gs_i + 1)); done; \
         echo "$$gs_job: waiting for a heavy-job slot ($$gs_n in use in $$gs_d, held by: $$gs_h)" >&2; fi; \
@@ -257,7 +264,7 @@ override REFUSE_IGNORED = $(if $(filter-out default,$(origin MAKE_COMMAND))$(sub
 
 ##@ Gates
 
-# luxarch:check-gate asset v4 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit check-gate`.
+# luxarch:check-gate asset v6 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit check-gate`.
 # ── The fleet gate: every leg runs, then the gate fails naming each red leg ───────────────────────
 # Emitted by `luxarch --emit check-gate`; it replaces a hand-written `check:` line. A gate written as a
 # prerequisite list (`check: … lint mypy test arch …`) stops at the FIRST failing leg: one ruff finding
@@ -290,7 +297,7 @@ override REFUSE_IGNORED = $(if $(filter-out default,$(origin MAKE_COMMAND))$(sub
 # GNUMAKEFLAGS given as a command-line variable is refused, and MAKE and SHELL are checked as the
 # recipe runs: make's own MAKE, and a POSIX shell.
 # Under `make -n` the legs dry-run (each sub-make prints its commands) and the gate exits 1 with no
-# verdict: nothing ran, so nothing passed. Stated limits: a second makefile given with `-f` is part
+# verdict: nothing ran, so nothing passed. A second makefile given with `-f` is part
 # of the makefile as far as make can tell, and a variable a leg runs that the makefile sets with `?=`
 # or never sets (an image, a tool, its arguments) takes a value from the environment; the gate can
 # tell neither from your own. `make -o check`, or `-o` in MAKEFLAGS in the environment, marks `check`
@@ -300,6 +307,8 @@ override REFUSE_IGNORED = $(if $(filter-out default,$(origin MAKE_COMMAND))$(sub
 # its legs run, so a full gate counts once against HEAVY_SLOTS and every scan and suite it starts runs
 # inside that slot instead of waiting for a second one. Its two fatal steps run before it takes the
 # slot, so each of their full scans takes a slot of its own for as long as it runs.
+# Each leg ends with a `── make <leg>: <N>s` line, its wall time, so a slow gate says which leg holds
+# the time.
 
 # Setting: the legs, in order, set in the makefile. An app repo's are exactly these; a repo with more
 # legs (a guard's own parity suite) appends them. Removing one reds repo.makefile_canonical ----------
@@ -315,7 +324,9 @@ check: ## THE fleet gate: runs every leg, then fails naming each red one
 	$(if $(value guard_slot),,$(error REFUSING: the gate holds a heavy-job slot from the guard-run block (v4), which this makefile does not define: paste luxarch --emit guard-run above it))$(guard_slot); \
 	failed=; for leg in $(CHECK_LEGS); do \
 	  printf '\n── make %s\n' "$$leg"; \
+	  started=$$(date +%s); \
 	  $(MAKE) --no-print-directory "$$leg" || failed="$$failed $$leg"; \
+	  printf '── make %s: %ss\n' "$$leg" "$$(($$(date +%s) - started))"; \
 	done; \
 	if [ -n "$$failed" ]; then printf '\n✗ make check FAILED:%s (every leg ran; each one is above)\n' "$$failed"; exit 1; fi; \
 	case '$(filter-out -%,$(firstword $(MAKEFLAGS)))' in *n*) printf '\nmake -n: the legs above were printed, not run, so make check gives no verdict\n'; exit 1;; esac; \
@@ -458,7 +469,7 @@ test: ## pytest against the INSTALLED package (canonical config), then the cover
 # Both targets fire on their own via the committed git hooks in hooks/ (core.hooksPath,
 # installed by `luxlint --emit-hooks | sh`): pre-commit runs gitleaks-staged, pre-push runs
 # gitleaks. That is the belt; `make check` is the braces.
-# luxarch:gitleaks asset v21 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit gitleaks`.
+# luxarch:gitleaks asset v26 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit gitleaks`.
 # ── The privacy gate: EVERY surface a commit publishes ──────────────────────────────────────────
 # Emitted by `luxarch --emit gitleaks`. Drop in verbatim.
 #
@@ -562,19 +573,633 @@ override gitleaks_flags = $(subst :SP:, ,$(firstword $(subst :CUT:, ,$(subst $(g
 override gitleaks_refusals = $(foreach v,MAKEFLAGS GNUMAKEFLAGS,$(if $(filter command,$(origin $(v))),$(error REFUSING: $(v) is given as a command-line variable, so the scan would run under flags it never saw: pass make's flags as flags)))$(if $(or $(findstring i,$(filter-out -%,$(firstword $(MAKEFLAGS)))),$(findstring t,$(filter-out -%,$(firstword $(MAKEFLAGS))))),$(error REFUSING: make -i or -t would let a finding pass: run the scan without it))$(if $(filter --eval=% -I% --include-dir%,$(gitleaks_flags)),$(error REFUSING: --eval or -I adds makefile text from outside, which could set the identity allowance: run the scan without it))$(if $(strip $(MAKEFILES)),$(error REFUSING: MAKEFILES ($(MAKEFILES)) reads other makefiles before this one: unset it))$(foreach v,SHELL .SHELLFLAGS,$(if $(filter environment% command,$(origin $(v))),$(error REFUSING: $(v) comes from the $(origin $(v)), so the scan would run in another shell)))$(if $(filter environment% command,$(origin MAKEFILE_LIST)),$(error REFUSING: MAKEFILE_LIST comes from the $(origin MAKEFILE_LIST), so the identity pass would read other makefiles: unset it))$(if $(findstring n,$(filter-out -% %=%,$(firstword $(MAKEFLAGS)))),,$(if $(filter command,$(origin CURDIR)),$(error REFUSING: CURDIR is on the command line, so the scan would read another repository's history and report it as this one's: use make -C <dir>)))$(if $(filter 0,$(MAKELEVEL)),$(foreach v,LUXLINT LUXLINT_IMAGE,$(if $(filter environment% command,$(origin $(v))),$(error REFUSING: $(v) comes from the $(origin $(v)), so the caller chose the image that decides this scan: set it in the makefile or Makefile.local))))
 override gitleaks_no_waiver = if [ -e "$$D/t/.gitleaksignore" ]; then mv "$$D/t/.gitleaksignore" "$$(mktemp -d "$$D/t/gitleaksignore.XXXXXXXX")/"; fi;
 unexport gitleaks_refusals gitleaks_no_waiver gitleaks_flags gitleaks_space
+# The builds this makefile's image block declares, one `<context><TAB><Dockerfile>` line each, for
+# the working-tree pass: each image of IMAGES (or the one image) by the build core's `img_context` and
+# `img_dockerfile`, the mirror when MIRROR_VERSION is set, and each `--build-context <name>=<dir>` in
+# BUILD_ARGS (a named context reads its own `.dockerignore`, so its Dockerfile field is empty).
+override gitleaks_q = '$(subst ','\'',$(1))'
+override gitleaks_pair = printf '%s\t%s\n' $(call gitleaks_q,$(call img_context,$(1))) $(call gitleaks_q,$(call img_dockerfile,$(1)));
+override gitleaks_named = $(patsubst --build-context=%,%,$(filter --build-context=%,$(BUILD_ARGS))) $(patsubst --build-context:NEXT:%,%,$(filter --build-context:NEXT:%,$(join $(BUILD_ARGS),$(addprefix :NEXT:,$(wordlist 2,$(words $(BUILD_ARGS)),$(BUILD_ARGS))))))
+override gitleaks_declared = $(if $(value img_context),$(if $(IMAGE_LIST),$(foreach n,$(IMAGE_LIST),$(call gitleaks_pair,$(n))),$(call gitleaks_pair,))$(if $(strip $(MIRROR_VERSION)),$(call gitleaks_pair,MIRROR)))$(foreach x,$(strip $(gitleaks_named)),printf '%s\t\n' $(call gitleaks_q,$(patsubst $(firstword $(subst =, ,$(x)))=%,%,$(x)));)
+unexport gitleaks_q gitleaks_pair gitleaks_named gitleaks_declared
+# The working-tree pass's file work, in one process (python3 in the luxlint image, no network): `farm`
+# lays out a link for each path in `cand` (a `dir/` entry: every file under it) for BuildKit to judge,
+# and `copy` copies each path in `sent` out of the checkout, a link as a link and a file with its NUL
+# bytes stripped. Paths are bytes end to end. `builds` asks make which `docker build` / `buildx build`
+# each target of each makefile git lists runs, and prints `B <context> <Dockerfile>` for each (`N <dir>
+# <Dockerfile>` for a named `--build-context`), repo-relative, and `U <Dockerfile>` for one whose
+# context it cannot read (an empty Dockerfile when that cannot be read either). make never sees the
+# repo's makefiles: it reads a mirror in which each is a rewritten copy (the MAKE variable renamed, `+`
+# prefixes dropped, so no recipe line runs under `-n`; every file make's MAKEFILE_LIST names, whatever
+# its name, and none it reads from outside the mirror) and every other entry links to the checkout,
+# with CURDIR pinned to the real directory, as luxarch's own makefile rules read one. It runs as
+# `nobody` (where the container lets it drop root), with the checkout read-only and no network. What
+# runs is the makefiles' `$(shell ...)`, the same text `make gitleaks` itself has just evaluated. Each
+# printed command is split as the shell splits it (`cd <dir>` followed, shell keywords and wrappers such
+# as `timeout 900` read past, a command substitution one unreadable word, a docker build it still cannot
+# read an unreadable build), and a build's context is its one positional word, each valued flag's value skipped.
+override define gitleaks_stage_py
+import os, sys
+mode, w, d = sys.argv[1], os.fsencode(sys.argv[2]), os.fsencode(sys.argv[3])
+def names(f):
+    with open(os.path.join(d, f), "rb") as h:
+        return [n for n in h.read().split(b"\n") if n]
+def entry(p):
+    return os.path.islink(p) or os.path.isfile(p)
+if mode == "farm":
+    for p in names(b"cand"):
+        src, got = os.path.join(w, p.rstrip(b"/")), []
+        if p.endswith(b"/"):
+            for here, dirs, files in os.walk(src):
+                got += [os.path.relpath(os.path.join(here, n), w) for n in files + dirs if entry(os.path.join(here, n))]
+        elif entry(src):
+            got.append(p)
+        for q in got:
+            dst = os.path.join(d, b"s", q)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            if not os.path.lexists(dst):
+                os.symlink(b"-", dst)
+elif mode == "copy":
+    for p in names(b"sent"):
+        src, dst = os.path.join(w, p), os.path.join(d, b"t", p)
+        if not entry(src):
+            continue
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if os.path.islink(src):
+            os.symlink(os.readlink(src), dst)
+            continue
+        with open(src, "rb") as i, open(dst, "wb") as o:
+            for chunk in iter(lambda: i.read(1 << 20), b""):
+                o.write(chunk.replace(b"\0", b""))
+elif mode == "builds":
+    import posixpath, re, shlex, subprocess, tempfile, time
+    from concurrent.futures import ThreadPoolExecutor
+    wr = os.fsdecode(w)
+    base = tempfile.mkdtemp()
+    os.chmod(base, 0o755)
+    top = os.path.join(base, "r")
+    ents = ("GNUmakefile", "makefile", "Makefile")
+    def mkfile(n):
+        return n in ents or n.startswith("Makefile") or n.endswith(".mk")
+    mks, need = set(), {wr}
+    for here, dirs, files in os.walk(wr):
+        dirs[:] = [x for x in dirs if x not in (".git", "node_modules", ".venv", "venv", "__pycache__")]
+        for f in files:
+            if mkfile(f):
+                mks.add(os.path.join(here, f))
+                p = here
+                while p not in need:
+                    need.add(p)
+                    p = os.path.dirname(p)
+    sub = re.compile(r"\$([({])MAKE([)}])")
+    plus = re.compile(r"(?m)^(\t[@\- ]*)\+")
+    for real in sorted(need, key=len):
+        dst = top + real[len(wr):]
+        os.makedirs(dst, exist_ok=True)
+        os.chmod(dst, 0o755)
+        for e in os.scandir(real):
+            out = os.path.join(dst, e.name)
+            if e.path in need and e.is_dir(follow_symlinks=False):
+                continue
+            if e.path in mks and e.is_file(follow_symlinks=False):
+                with open(e.path, encoding="utf-8", errors="surrogateescape") as h:
+                    t = h.read()
+                with open(out, "w", encoding="utf-8", errors="surrogateescape") as h:
+                    h.write(plus.sub(r"\1", sub.sub(r"$\1GITLEAKS_SUBMAKE\2", t)))
+                os.chmod(out, 0o644)
+            else:
+                os.symlink(e.path, out)
+    def own_copy(q):
+        # the mirror path `q` becomes a rewritten copy of the file it stands for, each directory on the
+        # way a real mirror directory; False when it is not under the mirror or names no file
+        q = os.path.normpath(q)
+        if q != top and not q.startswith(top + "/"):
+            return False
+        at = top
+        for part in q[len(top) + 1:].split("/")[:-1]:
+            at = os.path.join(at, part)
+            if os.path.islink(at):
+                real = os.readlink(at)
+                if not os.path.isdir(real):
+                    return False
+                os.unlink(at)
+                os.mkdir(at, 0o755)
+                for e in os.scandir(real):
+                    os.symlink(e.path, os.path.join(at, e.name))
+            elif not os.path.isdir(at):
+                return False
+        if not os.path.islink(q):
+            return os.path.isfile(q)
+        real = os.readlink(q)
+        if not os.path.isfile(real):
+            return False
+        with open(real, encoding="utf-8", errors="surrogateescape") as h:
+            t = h.read()
+        os.unlink(q)
+        with open(q, "w", encoding="utf-8", errors="surrogateescape") as h:
+            h.write(plus.sub(r"\1", sub.sub(r"$\1GITLEAKS_SUBMAKE\2", t)))
+        os.chmod(q, 0o644)
+        return True
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent", "LANG": "C.UTF-8",
+           "GIT_DIR": os.path.join(wr, ".git"), "GIT_WORK_TREE": wr, "GIT_CONFIG_COUNT": "1",
+           "GIT_CONFIG_KEY_0": "safe.directory", "GIT_CONFIG_VALUE_0": "*"}
+    drop = [os.geteuid() == 0]
+    end = time.monotonic() + 240
+    def run(args, cwd, rel):
+        t = max(1, min(60, end - time.monotonic()))
+        a = ["make", *args, "GITLEAKS_SUBMAKE=make", "CURDIR=" + posixpath.join(wr, rel).rstrip("/")]
+        kw = dict(cwd=cwd, env=env, capture_output=True, text=True, errors="surrogateescape", timeout=t, check=False)
+        if drop[0]:
+            try:
+                return subprocess.run(a, user=65534, group=65534, extra_groups=[], **kw)
+            except PermissionError:
+                drop[0] = False
+        return subprocess.run(a, **kw)
+    vf = set("-t --tag --target -f --file --platform --build-arg --output -o --label --cache-from --cache-to --secret --ssh --progress --builder --iidfile --metadata-file --network --build-context --shm-size --add-host --allow --annotation --attest --sbom --provenance --call --cgroup-parent --ulimit --memory -m --memory-swap --cpu-shares -c --cpu-period --cpu-quota --cpuset-cpus --cpuset-mems --isolation --security-opt --label-file --policy".split())
+    gv = set("-H --host --context -c --config -l --log-level --tlscacert --tlscert --tlskey".split())
+    found = set()
+    def rel_of(p, cwd):
+        if p.startswith("/"):
+            for pre in (wr, top):
+                if p == pre or p.startswith(pre.rstrip("/") + "/"):
+                    return posixpath.normpath(p[len(pre):].lstrip("/") or ".")
+            return posixpath.normpath(p)
+        return posixpath.normpath(posixpath.join(cwd, p))
+    def bad(x):
+        return any(c in x for c in "$`*?[") or x == ""
+    def build(words, cwd):
+        i = 1
+        while i < len(words) and words[i].startswith("-"):
+            i += 2 if words[i] in gv else 1
+        rest = words[i:]
+        if rest[:1] == ["build"]:
+            rest = rest[1:]
+        elif len(rest) > 1 and rest[0] in ("buildx", "image", "builder") and rest[1] == "build":
+            rest = rest[2:]
+        else:
+            return False
+        pos, df, named, j = [], None, [], 0
+        while j < len(rest):
+            a = rest[j]
+            if a in ("-f", "--file") and j + 1 < len(rest):
+                df, j = rest[j + 1], j + 2
+                continue
+            if a.startswith("--file="):
+                df = a[7:]
+            elif a.startswith("-f") and not a.startswith("--") and len(a) > 2:
+                df = a[2:].lstrip("=")
+            elif a == "--build-context" and j + 1 < len(rest):
+                named.append(rest[j + 1])
+                j += 2
+                continue
+            elif a.startswith("--build-context="):
+                named.append(a[16:])
+            elif a in vf:
+                j += 2
+                continue
+            elif a == "-" or not a.startswith("-"):
+                pos.append(a)
+            j += 1
+        if df == "-" or (len(pos) == 1 and ("://" in pos[0] or pos[0].startswith("git@"))):
+            return True
+        spelled = df if df is not None else posixpath.join(pos[0], "Dockerfile") if len(pos) == 1 else ""
+        if bad(spelled):
+            key = ""
+        elif cwd is None:
+            key = posixpath.normpath(spelled)
+        else:
+            key = rel_of(spelled, cwd)
+        if cwd is None or len(pos) != 1 or pos[0] == "-" or bad(pos[0]):
+            found.add(("U", key))
+            return True
+        ctx, dfr = rel_of(pos[0], cwd), key
+        found.add(("B", ctx, dfr))
+        for n in named:
+            v = n.split("=", 1)[1] if "=" in n else ""
+            if v and "://" not in v and not v.startswith("docker-image:") and not v.startswith("oci-layout:"):
+                found.add(("N", "U" if bad(v) else rel_of(v, cwd), dfr))
+        return True
+    keywords = {"then", "else", "elif", "do", "if", "while", "until", "{", "!"}
+    wrappers = {"env": {"-u", "-C", "-S"}, "exec": {"-a"}, "command": set(), "nohup": set(), "time": set(),
+                "sudo": {"-u", "-g", "-C", "-D", "-h", "-p", "-U"}, "nice": {"-n"},
+                "xargs": {"-I", "-n", "-P", "-L", "-d", "-E", "-s", "-a"}, "timeout": {"-s", "-k"}}
+    def redir(t):
+        return bool(t) and set(t) <= set("<>&|") and ("<" in t or ">" in t)
+    def flat(s):
+        out, i, q = [], 0, ""
+        while i < len(s):
+            c = s[i]
+            if q == "'":
+                q = "" if c == "'" else q
+                out.append(c)
+                i += 1
+            elif c == "\\" and i + 1 < len(s):
+                out.append(s[i:i + 2])
+                i += 2
+            elif s.startswith("$(", i) or c == "`":
+                j, depth = i + 1, 1
+                if c == "`":
+                    while j < len(s) and s[j] != "`":
+                        j += 1
+                else:
+                    j += 1
+                    while j < len(s) and depth:
+                        depth += {"(": 1, ")": -1}.get(s[j], 0)
+                        j += 1
+                    j -= 1
+                out.append("$S")
+                i = j + 1
+            else:
+                if c in "'\"":
+                    q = "" if q == c else (q or c)
+                out.append(c)
+                i += 1
+        return "".join(out)
+    def line(text, cwd):
+        try:
+            lx = shlex.shlex(flat(text), posix=True, punctuation_chars=";&|()<>")
+            lx.whitespace_split = True
+            lx.commenters = ""
+            toks = list(lx)
+        except ValueError:
+            if "build" in text:
+                found.add(("U", ""))
+            return
+        stack, seg, cur = [], [], cwd
+        def seg_done(seg, cur):
+            k, out = 0, []
+            while k < len(seg):
+                t = seg[k]
+                if redir(t):
+                    k += 2
+                elif t.isdigit() and k + 1 < len(seg) and redir(seg[k + 1]):
+                    k += 3
+                else:
+                    out.append(t)
+                    k += 1
+            words = list(out)
+            while out:
+                if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", out[0]) or out[0] in keywords:
+                    out.pop(0)
+                elif out[0] in wrappers:
+                    wrap = out.pop(0)
+                    while out and out[0].startswith("-"):
+                        flag = out.pop(0)
+                        if flag in wrappers[wrap] and out:
+                            out.pop(0)
+                    if wrap == "timeout" and out:
+                        out.pop(0)
+                else:
+                    break
+            if not out:
+                return cur
+            if out[0] == "cd":
+                if len(out) == 2 and not bad(out[1]) and cur is not None:
+                    return rel_of(out[1], cur)
+                return None
+            # a command handed to a wrapper this does not know (a shell function: `bg docker build …`)
+            # is read from its docker word on
+            at = next((i for i, x in enumerate(out) if posixpath.basename(x) in ("docker", "podman")), None)
+            read = at is not None and build(out[at:], cur)
+            if not read and "build" in words and any(posixpath.basename(x) in ("docker", "podman") for x in words):
+                found.add(("U", ""))
+            return cur
+        split = []
+        for t in toks:
+            if set(t) <= set(";&|()") and t:
+                split += re.findall(r"&&|\|\||\|&|;;|[;&|()]", t)
+            else:
+                split.append(t)
+        for t in split + [";"]:
+            if t in ("&&", "||", ";", "|", "&", "|&", ";;"):
+                cur = seg_done(seg, cur)
+                seg = []
+            elif t == "(":
+                cur = seg_done(seg, cur)
+                seg = []
+                stack.append(cur)
+            elif t == ")":
+                seg_done(seg, cur)
+                seg = []
+                cur = stack.pop() if stack else cur
+            else:
+                seg.append(t)
+    def commands(out, cwd):
+        buf = ""
+        for raw in out.splitlines():
+            if raw.endswith("\\"):
+                buf += raw[:-1] + " "
+                continue
+            line(buf + raw, cwd)
+            buf = ""
+        if buf:
+            line(buf, cwd)
+    mine = ("gitleaks", "gitleaks-staged", "gitleaks-commit-msg")
+    rule = re.compile(r"^([^\s#=:][^#=]*?):{1,2}(?!=)")
+    with open(os.path.join(d, b"names"), "rb") as h:
+        listed = {os.fsdecode(n) for n in h.read().split(b"\0") if n}
+    for dd in sorted(need, key=len):
+        r0 = dd[len(wr):].lstrip("/")
+        names = set(os.listdir(top + dd[len(wr):]))
+        ent = next((n for n in ents if n in names), None)
+        if ent is None or posixpath.join(r0, ent) not in listed:
+            continue
+        cwd = top + dd[len(wr):]
+        rel = dd[len(wr):].lstrip("/") or "."
+        hold = [y for m in sorted(mks) if not os.path.relpath(m, dd).startswith("..") for y in ("-o", os.path.relpath(m, dd))]
+        hold += [y for g in mine for y in ("-o", g)]
+        try:
+            db = run(["-qpR", "-f", ent, "__gitleaks_no_such_target__"], cwd, rel).stdout
+            listed_mk = re.search(r"(?m)^MAKEFILE_LIST :?= ?(.*)$", db)
+            mklist = shlex.split(listed_mk.group(1)) if listed_mk else []
+            if not listed_mk or not all(own_copy(os.path.join(cwd, m)) for m in mklist):
+                found.add(("U", ""))
+                continue
+            db = run(["-qpR", "-f", ent, "__gitleaks_no_such_target__"], cwd, rel).stdout
+            hold += [y for m in mklist for y in ("-o", m)]
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            found.add(("U", ""))
+            continue
+        if "\n# Files\n" not in db:
+            found.add(("U", ""))
+            continue
+        files = db.split("\n# Files\n", 1)[1]
+        files = re.split(r"\n# (?:files hash-table stats|VPATH Search Paths)", files)[0]
+        goals, prev = [], ""
+        for ln in files.splitlines():
+            m = rule.match(ln)
+            if m and prev != "# Not a target:":
+                g = m.group(1).strip()
+                if not g.startswith(".") and "%" not in g and g not in mine and g not in goals:
+                    goals.append(g)
+            prev = ln
+        if not goals:
+            continue
+        try:
+            p = run(["-n", "-k", "-B", "--no-print-directory", *hold, "-f", ent, *goals], cwd, rel)
+            ok = p.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            p, ok = None, False
+        if ok:
+            commands(p.stdout, rel)
+            continue
+        def one(g, cwd=cwd, rel=rel, ent=ent, hold=hold):
+            try:
+                return run(["-n", "-B", "--no-print-directory", *hold, "-f", ent, g], cwd, rel)
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for g, q in zip(goals, pool.map(one, goals)):
+                if q is None:
+                    found.add(("U", ""))
+                    continue
+                commands(q.stdout, rel)
+    for f in sorted(found):
+        sys.stdout.write("\t".join(f) + "\n")
+endef
+unexport gitleaks_stage_py
+# Every object a push publishes, read raw: each commit on a branch, a tag or HEAD, and every annotated
+# tag object, the tags a tag points at included (a tag of a tag shows `for-each-ref` only its outer
+# tagger and message). The identity and message passes both read this list. `$$X` names the list file
+# and `$$N` the run's nonce; each git call writes a file, so a failing one stops the pass (`set -e`).
+override gitleaks_objects = git rev-list --branches --tags HEAD > "$$X"; \
+  git for-each-ref refs/heads refs/tags --format='%(objecttype) %(objectname)' > "$$X.r"; \
+  LC_ALL=C sed -n 's/^tag //p' "$$X.r" > "$$X.n"; LC_ALL=C sort -u "$$X.n" > "$$X.t"; \
+  while [ -s "$$X.t" ]; do cat "$$X.t" >> "$$X"; \
+    git cat-file --batch="$$N %(objectname) %(objecttype)" < "$$X.t" > "$$X.r"; LC_ALL=C tr -d '\000' < "$$X.r" > "$$X.c"; \
+    LC_ALL=C awk -v n="$$N" -v mode=nested "$$GITLEAKS_OBJECTS_AWK" "$$X.c" > "$$X.n"; LC_ALL=C sort -u "$$X.n" > "$$X.t"; \
+  done; \
+  git cat-file --batch="$$N %(objectname) %(objecttype)" < "$$X" > "$$X.r"; LC_ALL=C tr -d '\000' < "$$X.r" > "$$X.c";
+
+# Reads the raw objects `git cat-file --batch` prints, each after a `<nonce> <sha> <type>` line, and
+# reads every header line a commit or tag carries, continuation lines included:
+#   mode=id      prints `<identity><TAB><where>` for each author, committer and tagger line (the date
+#                cut off), each address an unknown header holds, and each address a signature carries.
+#   mode=msg     prints each tag message, a `mergetag` header's embedded tag included, as
+#                `<nonce> tag-message/<sha>` (or `mergetag-message/<commit>-<n>`) and its lines.
+#   mode=nested  prints the object each tag of a tag points at.
+# A signature is a `gpgsig` / `gpgsig-sha256` header, or a signature block at the end of a tag message.
+# An address in one is published with the object: gpg writes the signing user ID (subpacket 28) when
+# the key is named by address, an X.509 signature carries the signer's certificate (gitsign's names
+# the signer's address), and an armor header can say anything. OpenPGP packets are parsed: the
+# signer's user ID, a User ID packet, a human-readable notation, an embedded signature and an
+# embedded key block (subpacket 38, `gpg --include-key-block`: the signer's key with every user ID)
+# are read;
+# an issuer key ID or fingerprint names a key, not an address, and is not an identity. An SSHSIG is
+# parsed and each printable string it holds is read; a certificate key and an X.509 signature are read
+# for every address-shaped printable run. A signature in a form this cannot parse is refused as
+# unreadable, never passed. awk has no bitwise operators, so bits are read with division, and powers of two come from a table
+# (busybox awk can be built without `^`).
+override define gitleaks_objects_awk
+function b64init(   s, i) {
+  s = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  for (i = 1; i <= 64; i++) B64[substr(s, i, 1)] = i - 1
+  P2[0] = 1
+  for (i = 1; i <= 8; i++) P2[i] = P2[i - 1] * 2
+}
+function decode(text,   L, nl, k, i, c, acc, bits, cnt) {
+  cnt = 0; acc = 0; bits = 0; nl = split(text, L, "\n")
+  for (k = 1; k <= nl; k++) {
+    if (L[k] ~ /^=/) break
+    for (i = 1; i <= length(L[k]); i++) {
+      c = substr(L[k], i, 1)
+      if (c == "=") break
+      if (!(c in B64)) return -1
+      acc = acc * 64 + B64[c]; bits += 6
+      if (bits >= 8) { bits -= 8; BY[++cnt] = int(acc / P2[bits]); acc = acc % P2[bits] }
+    }
+  }
+  return cnt
+}
+function str(p, e,   s, i) {
+  s = ""
+  for (i = p; i <= e; i++) s = s sprintf("%c", BY[i])
+  return s
+}
+function num(p, w,   v, k) {
+  v = 0
+  for (k = 0; k < w; k++) v = v * 256 + BY[p + k]
+  return v
+}
+function out(s, where) {
+  gsub(/[\t\n\r]/, " ", s)
+  print s "\t" where
+}
+function emit(s, where) {
+  if (s ~ /[<>]/) out(s, where)
+  else if (s ~ /@/) out("signer <" s ">", where)
+}
+function unreadable(where) {
+  out("a signature this pass cannot read <?>", where)
+}
+function runs(p, e, where,   i, r) {
+  r = ""
+  for (i = p; i <= e + 1; i++) {
+    if (i <= e && BY[i] >= 32 && BY[i] <= 126) { r = r sprintf("%c", BY[i]); continue }
+    while (match(r, /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+([.][A-Za-z0-9-]+)*[.][A-Za-z][A-Za-z]+/)) {
+      out("signer <" substr(r, RSTART, RLENGTH) ">", where); r = (RSTART + RLENGTH <= length(r)) ? substr(r, RSTART + RLENGTH) : ""
+    }
+    r = ""
+  }
+}
+function subs(p, e, where,   l1, len, t, nl, vl) {
+  while (p <= e) {
+    l1 = BY[p++]
+    if (l1 < 192) len = l1
+    else if (l1 < 255) { if (p > e) return 0; len = (l1 - 192) * 256 + BY[p++] + 192 }
+    else { if (p + 3 > e) return 0; len = num(p, 4); p += 4 }
+    if (len < 1 || p + len - 1 > e) return 0
+    t = BY[p] % 128
+    if (t == 28) emit(str(p + 1, p + len - 1), where)
+    else if (t == 32) { if (!sig(p + 1, p + len - 1, where)) return 0 }
+    else if (t == 38) { if (len < 3 || !pgp(p + 2, p + len - 1, where)) return 0 }
+    else if (t == 20) {
+      if (len < 9) return 0
+      nl = num(p + 5, 2); vl = num(p + 7, 2)
+      if (9 + nl + vl != len) return 0
+      if (BY[p + 1] >= 128) emit(str(p + 9 + nl, p + 8 + nl + vl), where)
+    }
+    p += len
+  }
+  return p == e + 1
+}
+function sig(p, e, where,   v, w, cnt) {
+  if (p > e) return 0
+  v = BY[p]
+  if (v == 3) return 1
+  if (v != 4 && v != 5 && v != 6) return 0
+  w = (v == 6) ? 4 : 2
+  p += 4
+  if (p + w - 1 > e) return 0
+  cnt = num(p, w); p += w
+  if (p + cnt - 1 > e || !subs(p, p + cnt - 1, where)) return 0
+  p += cnt
+  if (p + w - 1 > e) return 0
+  cnt = num(p, w); p += w
+  if (p + cnt - 1 > e || !subs(p, p + cnt - 1, where)) return 0
+  return 1
+}
+function pgp(p, e, where,   h, tag, len, l1, lt, w) {
+  while (p <= e) {
+    h = BY[p++]
+    if (h < 128) return 0
+    if (int(h / 64) % 2) {
+      tag = h % 64
+      if (p > e) return 0
+      l1 = BY[p++]
+      if (l1 < 192) len = l1
+      else if (l1 < 224) { if (p > e) return 0; len = (l1 - 192) * 256 + BY[p++] + 192 }
+      else if (l1 == 255) { if (p + 3 > e) return 0; len = num(p, 4); p += 4 }
+      else return 0
+    } else {
+      tag = int(h / 4) % 16; lt = h % 4
+      if (lt == 3) len = e - p + 1
+      else { w = (lt == 0) ? 1 : (lt == 1) ? 2 : 4; if (p + w - 1 > e) return 0; len = num(p, w); p += w }
+    }
+    if (p + len - 1 > e) return 0
+    if (tag == 2) { if (!sig(p, p + len - 1, where)) return 0 }
+    else if (tag == 13) emit(str(p, p + len - 1), where)
+    else if (tag != 4 && tag != 6 && tag != 12 && tag != 14 && tag != 17) return 0
+    p += len
+  }
+  return 1
+}
+function sshstrings(p, e, where,   len, s) {
+  while (p <= e) {
+    if (p + 3 > e) return 0
+    len = num(p, 4); p += 4
+    if (p + len - 1 > e) return 0
+    s = str(p, p + len - 1)
+    if (s ~ /^[ -~]*$/ && s ~ /@/ && s !~ /^[a-z0-9.-]+@openssh[.]com$/) emit(s, where)
+    p += len
+  }
+  return 1
+}
+function ssh(e, where,   p, i, len) {
+  if (e < 10 || str(1, 6) != "SSHSIG") return 0
+  p = 11
+  for (i = 1; i <= 5; i++) {
+    if (p + 3 > e) return 0
+    len = num(p, 4); p += 4
+    if (p + len - 1 > e) return 0
+    if (i == 1) {
+      if (len >= 4 && num(p, 4) <= len - 4 && str(p + 4, p + 3 + num(p, 4)) ~ /-cert-/) runs(p, p + len - 1, where)
+      else if (!sshstrings(p, p + len - 1, where)) return 0
+    } else if (i < 5 && str(p, p + len - 1) ~ /@/) emit(str(p, p + len - 1), where)
+    p += len
+  }
+  return p == e + 1
+}
+function armor(text, where, required,   L, nl, i, ty, body, found, ok, nb, hv) {
+  nl = split(text, L, "\n"); found = 0
+  for (i = 1; i <= nl; i++) {
+    if (L[i] !~ /^-----BEGIN (PGP SIGNATURE|PGP MESSAGE|SSH SIGNATURE|SIGNED MESSAGE)-----$/) continue
+    ty = substr(L[i], 12, length(L[i]) - 16); body = ""; ok = 0; found++
+    for (i++; i <= nl; i++) {
+      if (L[i] == "-----END " ty "-----") { ok = 1; break }
+      if (L[i] ~ "^[A-Za-z0-9+/=]+$") body = body L[i] "\n"
+      else if (L[i] ~ /@/) { hv = L[i]; sub(/^[^:]*:[ ]*/, "", hv); emit(hv, where) }
+    }
+    nb = ok ? decode(body) : -1
+    if (nb <= 0) { unreadable(where); continue }
+    if (ty ~ /^PGP/) ok = pgp(1, nb, where)
+    else if (ty == "SSH SIGNATURE") ok = ssh(nb, where)
+    else runs(1, nb, where)
+    if (!ok) unreadable(where)
+  }
+  if (required && !found) unreadable(where)
+}
+function object(text, otyp, osha, where, name, top,   L, nl, i, hn, hv, sp, body, j, target) {
+  nl = split(text, L, "\n"); i = 1
+  while (i <= nl && L[i] != "") {
+    hn = L[i]; sp = index(hn, " "); hv = (sp && sp < length(hn)) ? substr(hn, sp + 1) : ""; hn = (sp > 1) ? substr(hn, 1, sp - 1) : (sp ? "" : hn)
+    for (i++; i <= nl && L[i] ~ /^ /; i++) hv = hv "\n" (length(L[i]) > 1 ? substr(L[i], 2) : "")
+    if (mode == "nested") {
+      if (hn == "object") target = hv
+      else if (hn == "type" && hv == "tag" && top) print target
+    } else if (hn == "mergetag") {
+      object(hv, "tag", osha, "the mergetag in commit " osha, "mergetag-message/" osha "-" (++MT), 0)
+    } else if (mode != "id") {
+      continue
+    } else if (hn == "author" || hn == "committer" || hn == "tagger") {
+      sub(/ [0-9]+ [-+][0-9][0-9][0-9][0-9]$/, "", hv); out(hv, where)
+    } else if (hn == "gpgsig" || hn == "gpgsig-sha256") {
+      armor(hv, "the signature of " where, 1)
+    } else if (hn !~ /^(tree|parent|object|type|tag|encoding)$/ && hv ~ /@/) {
+      out(hn " <" hv ">", where)
+    }
+  }
+  if (otyp != "tag") return
+  body = ""
+  for (j = i + 1; j <= nl; j++) body = body L[j] "\n"
+  if (mode == "msg") printf "%s %s\n%s", n, name, body
+  else if (mode == "id") armor(body, "the signature of " where, 0)
+}
+function flush() {
+  if (typ == "commit") object(buf, typ, sha, "commit " sha, "", 1)
+  else if (typ == "tag") object(buf, typ, sha, "tag " sha, "tag-message/" sha, 1)
+  buf = ""; typ = ""
+}
+BEGIN { b64init(); buf = ""; typ = ""; sha = ""; MT = 0 }
+NF == 3 && $1 == n { flush(); sha = $2; typ = $3; next }
+{ buf = buf $0 "\n" }
+END { flush() }
+endef
+unexport gitleaks_objects gitleaks_objects_awk
+gitleaks: override export GITLEAKS_OBJECTS_AWK = $(value gitleaks_objects_awk)
 gitleaks: override export GIT_NO_REPLACE_OBJECTS := 1
-gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks cover commit/push)
+gitleaks: override export GITLEAKS_STAGE_PY = $(value gitleaks_stage_py)
+gitleaks: ## secret scan over FULL HISTORY, what an image build sends, + the commit-identity pass (the hooks cover commit/push)
 	+@$(gitleaks_refusals)true
 	@# A caller cannot change what this scan reads or how its failures count: make's -i and -t, in any
 	@# spelling, makefile text from --eval, -I or MAKEFILES (each could set the identity allowance), a
 	@# SHELL or .SHELLFLAGS from outside, a CURDIR on the command line, and at the top level a LUXLINT or
 	@# LUXLINT_IMAGE from outside (`GITLEAKS_IMAGE` cannot be set at all) are refused before any pass runs,
 	@# on the first line, a `+` line: make runs it under -t too, and under .ONESHELL the first line's
-	@# prefix is the recipe's. Stated limits: under `make check`, a variable that reached the environment
-	@# of a leg is the gate's stated limit, since a bare `export` in the makefile looks the same, and a
+	@# prefix is the recipe's. Under `make check`, a variable that reached the environment of a leg
+	@# is not told apart from the makefile's own, since a bare `export` in it looks the same, and a
 	@# MAKELEVEL from outside looks like a leg. `-o` and `-n` from outside never reach a recipe (the
-	@# emitted git hooks clear make's flags), an untracked Makefile.local can say `.IGNORE`, and a nested
-	@# annotated tag shows only its outer tagger and message.
+	@# emitted git hooks clear make's flags), and an untracked Makefile.local can say `.IGNORE`.
 	@# A shallow clone and a graft file each make git (and so every pass) read part of the history,
 	@# and the scanned-nothing check below agrees with them: both are refused before any pass. A
 	@# merge commit's own changes are read against its first parent (`--diff-merges=first-parent`), in
@@ -590,7 +1215,7 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	@# directory it scans and from its ignore path, and both are that empty directory, so no file in the
 	@# checkout (tracked, untracked or excluded) waives a finding. A leak that reached history is
 	@# removed from it, never waived.
-	@set -e; $(GITLEAKS_HISTORY_ENV) C=$$(mktemp); O=$$(mktemp); E=$$(mktemp -d); trap 'rm -rf "$$C" "$$O" "$$E"' EXIT INT TERM; \
+	@set -e; $(GITLEAKS_HISTORY_ENV) C=$$(mktemp); O=$$(mktemp); E=$$(mktemp -d); trap 'trap "" HUP INT TERM; rm -rf "$$C" "$$O" "$$E"' EXIT; trap 'trap "" HUP INT TERM; exit 1' HUP INT TERM; \
 	[ "$$(git rev-parse --is-shallow-repository)" = false ] || { echo "REFUSING: this clone is shallow, so the scan would read only part of the published history: run git fetch --unshallow first."; exit 1; }; \
 	if [ -n "$$(git config --get extensions.partialClone)" ] || git config --type=bool --get-regexp '^remote\..*\.promisor$$' | grep -q ' true$$'; then \
 	  echo "REFUSING: this is a partial clone, so the scan cannot read the blobs it lacks: clone the repository in full first."; exit 1; fi; \
@@ -616,7 +1241,7 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	@# Which paths are binary is read from an empty work tree, run there, as the history scan reads
 	@# them, so a `.gitattributes` in the checkout (committed or not) calls no file text here that the
 	@# scan saw no patch for.
-	@set -e; $(GITLEAKS_HISTORY_ENV) C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
+	@set -e; $(GITLEAKS_HISTORY_ENV) C=$$(mktemp); D=$$(mktemp -d); trap 'trap "" HUP INT TERM; rm -rf "$$C" "$$D"' EXIT; trap 'trap "" HUP INT TERM; exit 1' HUP INT TERM; \
 	docker run --rm -v '$(subst ','\'',$(CURDIR))':/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
 	mkdir "$$D/t" "$$D/none"; \
 	git log --branches --tags HEAD --format= --name-only -z --root --diff-merges=first-parent > "$$D/names"; \
@@ -643,12 +1268,12 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	@# v13: every commit and annotated-tag MESSAGE, scanned as a file with the same config (credential
 	@# rules and the denylist). One `git log` and one `for-each-ref`, split on a header line carrying a
 	@# per-run nonce, so a message cannot forge a header and steer its own lines out of the scan.
-	@set -e; $(GITLEAKS_HISTORY_ENV) C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
+	@set -e; $(GITLEAKS_HISTORY_ENV) C=$$(mktemp); D=$$(mktemp -d); trap 'trap "" HUP INT TERM; rm -rf "$$C" "$$D"' EXIT; trap 'trap "" HUP INT TERM; exit 1' HUP INT TERM; \
 	docker run --rm -v '$(subst ','\'',$(CURDIR))':/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
 	N=$$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n'); [ $${#N} -eq 32 ]; \
-	mkdir -p "$$D/t/commit-message" "$$D/t/tag-message" "$$D/none"; \
+	mkdir -p "$$D/t/commit-message" "$$D/t/tag-message" "$$D/t/mergetag-message" "$$D/none"; \
 	git log --branches --tags HEAD --format="$$N commit-message/%H%n%B" > "$$D/raw"; \
-	git for-each-ref refs/tags --format="$$N tag-message/%(objectname)%0a%(contents)" >> "$$D/raw"; \
+	X="$$D/objs"; $(gitleaks_objects) LC_ALL=C awk -v n="$$N" -v mode=msg "$$GITLEAKS_OBJECTS_AWK" "$$X.c" >> "$$D/raw"; \
 	LC_ALL=C tr -d '\000' < "$$D/raw" > "$$D/msgs"; \
 	LC_ALL=C awk -v n="$$N" -v d="$$D/t" \
 	  '$$1 == n && NF == 2 { if (f != "") close(f); f = d "/" $$2; printf "" > f; next } \
@@ -657,14 +1282,15 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	  $(GITLEAKS_IMAGE) dir . -c /gl.toml --redact -v --ignore-gitleaks-allow \
 	  --gitleaks-ignore-path /none || { \
 	  echo "REFUSING: a commit or tag MESSAGE carries a finding (the File above names it:"; \
-	  echo "  commit-message/<sha> or tag-message/<object>). A message is published with its commit"; \
+	  echo "  commit-message/<sha>, tag-message/<object> or mergetag-message/<commit>-<n>). A message is"; \
+	  echo "  published with its commit"; \
 	  echo "  forever. Reword it (git rebase -i, or git filter-repo --message-callback for older"; \
 	  echo "  history), re-run, and ask the OWNER to approve the force-push. Never force-push unapproved."; \
 	  exit 1; }
 	@# v14: what a push publishes besides content and messages: every file PATH in history and every
 	@# branch and tag NAME. A path is not a patch line, so `gitleaks git` never read one, and a file or
 	@# a branch named for an internal host passed every gate into a public remote.
-	@set -e; $(GITLEAKS_HISTORY_ENV) C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
+	@set -e; $(GITLEAKS_HISTORY_ENV) C=$$(mktemp); D=$$(mktemp -d); trap 'trap "" HUP INT TERM; rm -rf "$$C" "$$D"' EXIT; trap 'trap "" HUP INT TERM; exit 1' HUP INT TERM; \
 	docker run --rm -v '$(subst ','\'',$(CURDIR))':/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
 	mkdir -p "$$D/t" "$$D/none"; \
 	git -c core.quotePath=false -c color.ui=never log --branches --tags HEAD --format= --name-only \
@@ -677,12 +1303,110 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	  echo "  A name is published with the history it is in. Rename it (git mv; git branch -m; for older"; \
 	  echo "  history git filter-repo --path-rename), re-run, and ask the OWNER to approve the force-push."; \
 	  exit 1; }
+	@# v23: what an image build SENDS. The passes above read history, and a file git does not hold (one
+	@# that is untracked, or gitignored and not dockerignored) still reaches the builder, where `COPY . .`
+	@# puts it in the image. History holds every tracked file as HEAD has it, so what is left to read is
+	@# each file git lists as untracked (gitignored included), changed against HEAD, marked
+	@# assume-unchanged or skip-worktree, under a clean/smudge `filter` attribute (git-crypt, LFS: HEAD
+	@# holds the cleaned bytes, the build sends the checkout's), or inside a submodule or a nested
+	@# repository. BuildKit decides
+	@# which of those each build sends, by its own ignore matcher: the paths are laid out as links and
+	@# built as the context (`FROM scratch`, `COPY . /`, exported with `--output type=local`) under the
+	@# ignore file BuildKit reads for that build, `<Dockerfile>.dockerignore` beside its Dockerfile, else
+	@# the context's `.dockerignore`. The builds are the ones the image block declares
+	@# (`gitleaks_declared` above), and each other Dockerfile git holds or would add (`Dockerfile`,
+	@# `Dockerfile.*`, `*.Dockerfile`, `*.dockerfile`, `Containerfile`, `*.Containerfile`; tracked, or
+	@# untracked and not gitignored) at each context a makefile recipe builds it from, as make prints
+	@# the recipe (`gitleaks_stage_py`'s `builds`): a recipe building `-f apps/b/Dockerfile.lint` from `.`
+	@# has it read at the root, under the root's ignore file. Every recipe that builds it is read, so several
+	@# contexts are each judged. One no recipe builds is read at its own directory, the context a build
+	@# of that directory gives it. One a recipe builds from a context it cannot read (a shell variable,
+	@# a `cd` to one, stdin), or a build command it cannot read at all, is read at its own directory and
+	@# at the checkout root, beside the contexts it can. A context outside the checkout is
+	@# refused. With no Dockerfile and no declared build, the untracked files git would add and the
+	@# files changed against HEAD (staged included) are read instead: one commit puts them in history.
+	@# What is sent is copied out and scanned by path, NULs stripped as the binary pass does. git reads
+	@# this checkout as the work tree, whatever `core.worktree` the repository sets. A
+	@# build no makefile recipe runs (a compose `build.context: .` for a nested Dockerfile, a script a
+	@# recipe calls, a sub-make's own arguments) is judged at its Dockerfile's directory, a gitignored
+	@# Dockerfile is not found, a `$(LUXLINT)` image with no make reads every undeclared
+	@# Dockerfile at its own directory (a note says so), and the pass needs `docker buildx`
+	@# wherever there is a Dockerfile. The host tools it runs (`cut`, `sort -u`, `dirname --`, `find
+	@# -print0`, `tr`, `sed`) are POSIX (`-print0` since POSIX.1-2024), and macOS ships each of them.
+	@set -e; $(GITLEAKS_HISTORY_ENV) unset GIT_INDEX_FILE; C=$$(mktemp); D=$$(mktemp -d); trap 'trap "" HUP INT TERM; rm -rf "$$C" "$$D"' EXIT; trap 'trap "" HUP INT TERM; exit 1' HUP INT TERM; \
+	docker run --rm -v '$(subst ','\'',$(CURDIR))':/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
+	mkdir "$$D/t" "$$D/s" "$$D/none" "$$D/df"; : > "$$D/seen"; : > "$$D/sent"; T=$$(printf '\t'); \
+	W='$(subst ','\'',$(CURDIR))'; A=$$(git -C "$$W" rev-parse --absolute-git-dir); \
+	g() { git -C "$$W" --git-dir="$$A" --work-tree="$$W" -c core.quotePath=false "$$@"; }; \
+	g ls-files -co --exclude-standard -z > "$$D/names"; \
+	g ls-files -o -z > "$$D/c0"; \
+	if git --git-dir="$$A" rev-parse -q --verify 'HEAD^{tree}' > /dev/null; then g diff --name-only --no-renames --no-ext-diff -z HEAD >> "$$D/c0"; else g ls-files -c -z >> "$$D/c0"; fi; \
+	g ls-files -v -z >> "$$D/c1"; g ls-files -s -z >> "$$D/c2"; g ls-files -z | g check-attr -z --stdin filter > "$$D/c3"; \
+	nl=$$(cat "$$D/names" "$$D/c0" "$$D/c1" "$$D/c2" "$$D/c3" | LC_ALL=C tr -cd '\n' | wc -c); \
+	[ "$$nl" -eq 0 ] || { echo "REFUSING: a path in the working tree holds a newline, which this scan cannot name: rename it."; exit 1; }; \
+	{ LC_ALL=C tr '\000' '\n' < "$$D/c0"; \
+	  LC_ALL=C tr '\000' '\n' < "$$D/c1" | { LC_ALL=C grep -E '^([a-z]|S) ' || true; } | LC_ALL=C cut -c 3-; \
+	  LC_ALL=C tr '\000' '\n' < "$$D/c2" | LC_ALL=C sed -n "s|^160000 [0-9a-f]* [0-9]*$$T\(.*\)|\1/|p"; \
+	  LC_ALL=C tr '\000' '\n' < "$$D/c3" | paste - - - | LC_ALL=C sed -n -e "/$${T}filter$${T}unspecified$$/d" -e "/$${T}filter$${T}unset$$/d" -e "s/$${T}filter$${T}[^$$T]*$$//p"; } | LC_ALL=C sort -u > "$$D/cand"; \
+	LC_ALL=C tr '\000' '\n' < "$$D/names" \
+	  | { LC_ALL=C grep -E '(^|/)(Dockerfile([._-][^/]+)?|dockerfile|[^/]+[._-][Dd]ockerfile|Containerfile([._-][^/]+)?|[^/]+[.]Containerfile)$$' || true; } \
+	  | { LC_ALL=C grep -v '[.]dockerignore$$' || true; } > "$$D/dockerfiles"; \
+	stage() { docker run --rm --network none -u "$$(id -u):$$(id -g)" -v "$$W":/w:ro -v "$$D":/d --entrypoint python3 $(LUXLINT) -c "$$GITLEAKS_STAGE_PY" "$$1" /w /d; }; \
+	{ $(gitleaks_declared) :; } > "$$D/builds"; \
+	if [ -s "$$D/dockerfiles" ] || [ -s "$$D/builds" ]; then \
+	  docker buildx version > /dev/null 2>&1 || { echo "REFUSING: this repository has a Dockerfile or declares a build, and docker buildx is not installed, so what an image build sends cannot be staged for the scan: install it."; exit 1; }; \
+	  stage farm; printf 'FROM scratch\nCOPY . /\n' > "$$D/df/Dockerfile"; \
+	  LC_ALL=C cut -f 2 "$$D/builds" | LC_ALL=C sed 's|^\(\./\)*||' > "$$D/used"; \
+	  docker run --rm --network none -v "$$W":/w:ro -v "$$D":/d:ro --entrypoint python3 $(LUXLINT) -c "$$GITLEAKS_STAGE_PY" builds /w /d > "$$D/made" \
+	    || { echo "note: make could not be asked which builds the makefiles run, so each Dockerfile the image block does not declare is read at its own directory."; : > "$$D/made"; }; \
+	  while IFS= read -r f; do \
+	    ! LC_ALL=C grep -qxF -- "$$f" "$$D/used" || continue; \
+	    F="$$f" LC_ALL=C awk -F "$$T" '$$3 == ENVIRON["F"] && $$1 == "B" { print $$2 FS $$3 } $$3 == ENVIRON["F"] && $$1 == "N" && $$2 != "U" { print $$2 FS }' "$$D/made" > "$$D/mine"; \
+	    cat "$$D/mine" >> "$$D/builds"; \
+	    LC_ALL=C grep -q . "$$D/mine" || printf '%s\t%s\n' "$$(dirname -- "$$f")" "$$f" >> "$$D/builds"; \
+	    if F="$$f" LC_ALL=C awk -F "$$T" '$$1 == "U" && ($$2 == "" || $$2 == ENVIRON["F"] || substr(ENVIRON["F"], length(ENVIRON["F"]) - length($$2)) == "/" $$2) { u = 1 } $$1 == "N" && $$2 == "U" && $$3 == ENVIRON["F"] { u = 1 } END { exit !u }' "$$D/made"; then \
+	      printf '%s\t%s\n' "$$(dirname -- "$$f")" "$$f" . "$$f" >> "$$D/builds"; \
+	    fi; \
+	  done < "$$D/dockerfiles"; \
+	  while IFS="$$T" read -r c f; do \
+	    case "$$c" in -|*://*|git@*) continue ;; esac; \
+	    c=$$(printf '%s\n' "$$c" | LC_ALL=C sed 's|^\(\./\)*||; s|/*$$||'); \
+	    case "$$c" in "$$W") c=. ;; "$$W"/*) c=$${c#"$$W"/} ;; "") c=. ;; esac; \
+	    case "$$c" in /*|..|../*|*/../*|*/..) echo "REFUSING: the build context $$c is outside this checkout, so this scan cannot read what it sends: build from inside the repository."; exit 1 ;; esac; \
+	    if [ -n "$$f" ] && [ -f "$$f.dockerignore" ]; then i="$$f.dockerignore"; elif [ -f "./$$c/.dockerignore" ]; then i="./$$c/.dockerignore"; else i=; fi; \
+	    ! LC_ALL=C grep -qxF -- "$$c$$T$$i" "$$D/seen" || continue; printf '%s\t%s\n' "$$c" "$$i" >> "$$D/seen"; \
+	    if [ -n "$$i" ]; then cp -- "$$i" "$$D/df/Dockerfile.dockerignore"; else : > "$$D/df/Dockerfile.dockerignore"; fi; \
+	    rm -rf "$$D/x"; mkdir -p "$$D/x" "$$D/s/$$c"; \
+	    docker buildx build -q --provenance=false --sbom=false --output "type=local,dest=$$D/x" -f "$$D/df/Dockerfile" "$$D/s/$$c" > /dev/null \
+	      || { echo "REFUSING: BuildKit could not judge the context $$c (ignore file: $${i:-none}), so what it sends cannot be scanned: see its error above."; exit 1; }; \
+	    (cd "$$D/x" && find . \( -type l -o -type f \) -print0) | LC_ALL=C tr '\000' '\n' \
+	      | if [ "$$c" = . ]; then LC_ALL=C sed 's|^[.]/||'; else LC_ALL=C sed "s|^[.]/|$$(printf '%s' "$$c" | LC_ALL=C sed 's/[|&\\]/\\&/g')/|"; fi >> "$$D/sent"; \
+	  done < "$$D/builds"; \
+	  what="a file an image build would send"; fix="remove it from the working tree, or exclude it in the ignore file that build reads (.dockerignore, or <Dockerfile>.dockerignore beside the Dockerfile)"; \
+	else \
+	  { g ls-files -o --exclude-standard -z; \
+	    if git --git-dir="$$A" rev-parse -q --verify 'HEAD^{tree}' > /dev/null; then g diff --name-only --no-renames --no-ext-diff -z HEAD; else g ls-files -c -z; fi; } \
+	    | LC_ALL=C tr '\000' '\n' > "$$D/sent"; \
+	  what="an untracked file git would add"; fix="remove it from the working tree, or gitignore it"; \
+	fi; \
+	LC_ALL=C sort -u "$$D/sent" > "$$D/n"; mv -f "$$D/n" "$$D/sent"; \
+	[ ! -s "$$D/sent" ] || stage copy; \
+	$(gitleaks_no_waiver) \
+	docker run --rm -v "$$D/t":/scan:ro -w /scan -v "$$D/none":/none:ro -v "$$C":/gl.toml:ro \
+	  $(GITLEAKS_IMAGE) dir . -c /gl.toml --redact -v --ignore-gitleaks-allow \
+	  --gitleaks-ignore-path /none || { \
+	  echo "REFUSING: $$what carries a finding (the File above is its path in the repository)."; \
+	  echo "  History does not hold it, so the passes above never read it. To fix: $$fix."; \
+	  exit 1; }
 	@# The identity pass — the half gitleaks structurally cannot do. It reads every author, committer
-	@# and tagger, and an address in a name field is refused whatever the allowance says.
+	@# and tagger, from git's formats and from the raw objects (nested tags and `mergetag` headers
+	@# included), and every address a header or a signature carries. An address in a name field, and an
+	@# identity line holding more than one `<` or `>`, is refused whatever the allowance says: the
+	@# allowance is anchored on the line's end, and git's formats read only the first `<...>`.
 	@# Walks what THIS repo publishes (branches, tags, HEAD), NOT `--all`: a remote-tracking ref caches the
 	@# remote's state, which during a scrub is by definition the un-rewritten history you are about to
 	@# force-push over — `--all` refused the verified fix, and any `git fetch` re-armed it.
-	@$(if $(filter environment% command,$(origin GIT_IDENTITY_OK)),$(error REFUSING: GIT_IDENTITY_OK comes from the $(origin GIT_IDENTITY_OK), so the caller chose which authors pass the identity pass: set it in the makefile))set -e; $(GITLEAKS_HISTORY_ENV) unset GIT_INDEX_FILE; I="$$(mktemp)"; trap 'rm -f "$$I"' EXIT INT TERM; \
+	@$(if $(filter environment% command,$(origin GIT_IDENTITY_OK)),$(error REFUSING: GIT_IDENTITY_OK comes from the $(origin GIT_IDENTITY_OK), so the caller chose which authors pass the identity pass: set it in the makefile))set -e; $(GITLEAKS_HISTORY_ENV) unset GIT_INDEX_FILE; I="$$(mktemp)"; Y="$$(mktemp -d)"; trap 'trap "" HUP INT TERM; rm -rf "$$I" "$$Y"' EXIT; trap 'trap "" HUP INT TERM; exit 1' HUP INT TERM; \
 	for f in $(foreach f,$(MAKEFILE_LIST),'$(subst ','\'',$(f))'); do \
 	  if ! git -C "$$(dirname "$$f")" --work-tree=. ls-files --error-unmatch -- "$$(basename "$$f")" >/dev/null 2>&1 && ! grep -q "luxarch:gitleaks asset" "$$f" && grep -Eq '^[[:space:]]*((override|export)[[:space:]]+)*GIT_IDENTITY_OK[[:space:]]*[:?+!]*=' "$$f"; then \
 	    echo "REFUSING: $$f sets GIT_IDENTITY_OK and git does not track it, so this machine chose which authors pass the identity pass: set it in the committed makefile."; exit 1; \
@@ -690,10 +1414,16 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 	done; \
 	git log --branches --tags HEAD --pretty='%an <%ae>%n%cn <%ce>' > "$$I"; \
 	git for-each-ref refs/tags --format='%(taggername) %(taggeremail)' | LC_ALL=C sed '/^ *$$/d' >> "$$I"; \
-	bad=$$({ LC_ALL=C grep -vE '$(GIT_IDENTITY_OK)' "$$I" || true; LC_ALL=C grep -E '^[^<]*@[^<]*<' "$$I" || true; } | LC_ALL=C sort -u); \
+	N=$$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n'); [ $${#N} -eq 32 ]; X="$$Y/objs"; $(gitleaks_objects) \
+	LC_ALL=C awk -v n="$$N" -v mode=id "$$GITLEAKS_OBJECTS_AWK" "$$X.c" > "$$Y/where"; LC_ALL=C cut -f1 "$$Y/where" >> "$$I"; \
+	bad=$$({ LC_ALL=C grep -vE '$(GIT_IDENTITY_OK)' "$$I" || true; LC_ALL=C grep -E '^[^<]*@[^<]*<' "$$I" || true; LC_ALL=C grep -vE '^[^<>]* <[^<>]*>$$' "$$I" || true; } | LC_ALL=C sort -u); \
 	if [ -n "$$bad" ]; then \
-	  echo "REFUSING: a non-fleet identity appears in commit or tag METADATA (author/committer/tagger):"; \
+	  echo "REFUSING: a non-fleet identity appears in commit or tag METADATA (author/committer/tagger/signer):"; \
 	  echo "$$bad" | LC_ALL=C sed 's/^/    /'; \
+	  echo "$$bad" > "$$Y/bad"; w=$$(LC_ALL=C awk -F '\t' 'NR == FNR { b[$$0]; next } ($$1 in b) { print "    " $$2 ": " $$1 }' "$$Y/bad" "$$Y/where" | LC_ALL=C sort -u); \
+	  if [ -n "$$w" ]; then echo "  read from the raw objects:"; echo "$$w"; \
+	    echo "  A signature carries its signer's user ID when the key is named by address: name it by"; \
+	    echo "  fingerprint (git config user.signingKey <fingerprint>) or sign as the fleet identity, then rewrite."; fi; \
 	  echo "gitleaks cannot see this — it scans diffs, not commit headers, so it reported no leaks."; \
 	  echo "An address here is attached to every affected commit forever, not to one line of one file."; \
 	  echo "Scrub per FLEET-ONBOARDING-STANDARD §2: mirror backup -> git filter-repo -> re-verify with"; \
@@ -724,7 +1454,7 @@ gitleaks: ## secret scan over FULL HISTORY + the commit-identity pass (the hooks
 # with that name, copied to the scan root, is renamed there before the scan and scanned like any file.
 gitleaks-staged: ## secret scan of the STAGED changes (run by hooks/pre-commit)
 	+@$(gitleaks_refusals)true
-	@set -e; C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
+	@set -e; C=$$(mktemp); D=$$(mktemp -d); trap 'trap "" HUP INT TERM; rm -rf "$$C" "$$D"' EXIT; trap 'trap "" HUP INT TERM; exit 1' HUP INT TERM; \
 	docker run --rm -v '$(subst ','\'',$(CURDIR))':/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
 	mkdir "$$D/t" "$$D/none"; \
 	git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMRT -z > "$$D/names"; \
@@ -754,7 +1484,7 @@ gitleaks-commit-msg: ## secret + denylist scan of the commit MESSAGE being writt
 	  echo "  passes the file git hands it; re-emit the hooks with luxlint --emit-hooks." >&2; \
 	  exit 1; \
 	fi; \
-	C=$$(mktemp); D=$$(mktemp -d); trap 'rm -rf "$$C" "$$D"' EXIT INT TERM; \
+	C=$$(mktemp); D=$$(mktemp -d); trap 'trap "" HUP INT TERM; rm -rf "$$C" "$$D"' EXIT; trap 'trap "" HUP INT TERM; exit 1' HUP INT TERM; \
 	docker run --rm -v '$(subst ','\'',$(CURDIR))':/repo $(LUXLINT) --emit-config gitleaks > "$$C"; \
 	mkdir -p "$$D/t/commit-message" "$$D/none"; \
 	LC_ALL=C tr -d '\000' < "$$M" > "$$D/t/commit-message/COMMIT_EDITMSG"; \
@@ -891,7 +1621,7 @@ guard-version-check: ## FATAL: fail if any guard pin is behind the published :la
 	  fi; \
 	done; exit $$rc
 
-# luxarch:guard-upgrade asset v6 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit guard-upgrade`.
+# luxarch:guard-upgrade asset v7 - DO NOT edit this marker line; it is how repo.emitted_assets_current knows your copy is current. Re-emit with `luxarch --emit guard-upgrade`.
 # Bumps each guard pin to its latest release and prints the rules the new luxarch adds (`--new-rules`).
 # The preview mounts `$(CURDIR)`, this makefile's directory, whatever directory `make -C` ran from.
 # Latest is the registry's `:latest`, or with REGISTRY empty (guards loaded from the release tarball)
@@ -900,9 +1630,17 @@ guard-version-check: ## FATAL: fail if any guard pin is behind the published :la
 # step: a failed write leaves the Makefile as it was), then read back: the same on macOS and Linux.
 # A guard whose latest cannot be read, or whose `:latest` could not be pulled (a copy cached here may
 # be behind), is named and fails the run: "all pins already at latest" is printed only when every
-# guard was read.
+# guard was read. A guard's own repo builds that guard from its source and holds no pin for it:
+# where a VERSION file sits beside a pyproject.toml whose [project] name is a guard's and that
+# guard has no pin, it is skipped with one line saying so; a pin it does hold is bumped as anywhere.
+# Anywhere else a missing pin fails the run.
 guard-upgrade:  ## Bump every guard pin to the published latest (prints what newly bites)
-	@unread=; checked=; bumped=; for g in luxarch luxlint luxaudit; do \
+	@unread=; checked=; bumped=; self=; \
+	if [ -f VERSION ] && [ -f pyproject.toml ]; then self=$$(sed -n -E '/^\[project\][[:space:]]*$$/,/^\[/s/^name[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' pyproject.toml); fi; \
+	for g in luxarch luxlint luxaudit; do \
+	  var=$$(echo $$g | tr a-z A-Z)_VERSION; \
+	  old=$$(sed -n -E "s/^$$var[[:space:]]*:=[[:space:]]*//p" Makefile); \
+	  if [ -z "$$old" ] && [ -n "$$self" ] && [ "$$g" = "$$self" ]; then echo "$$g: this repo builds $$g from its own source (VERSION, pyproject.toml [project] name), so it holds no pin for it — skipped"; continue; fi; \
 	  if [ -n "$(REGISTRY)" ]; then \
 	    img=$(REGISTRY)/luxardolabs/$$g; src="$$img:latest"; \
 	    if docker pull -q $$img:latest >/dev/null 2>&1; then latest=$$(docker run --rm $$img:latest --version 2>/dev/null | awk '{print $$2}'); \
@@ -911,8 +1649,6 @@ guard-upgrade:  ## Bump every guard pin to the published latest (prints what new
 	    img=$$g; src="a released $$g:X.Y.Z image on this machine (REGISTRY is empty)"; \
 	    latest=$$(docker images --format '{{.Tag}}' $$g 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1); \
 	  fi; \
-	  var=$$(echo $$g | tr a-z A-Z)_VERSION; \
-	  old=$$(sed -n -E "s/^$$var[[:space:]]*:=[[:space:]]*//p" Makefile); \
 	  if [ -z "$$old" ]; then echo "!! no $$var pin found in Makefile — NOT bumped"; unread="$$unread $$g"; continue; fi; \
 	  if [ -z "$$latest" ]; then echo "!! could not read $$src — $$var left at $$old"; unread="$$unread $$g"; continue; fi; \
 	  checked=1; \
