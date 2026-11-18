@@ -56,6 +56,9 @@ def database(**parts):
         "checkout": override("CHECKOUT", "'$(subst ','\\'',$(CURDIR))'"),
         "legs": "# makefile (from 'Makefile', line 321)\n"
         "CHECK_LEGS = lint mypy test arch audit gitleaks build-pins\n",
+        "makefiles": "# makefile (from 'Makefile.local', line 1)\n"
+        "MAKEFILE_LIST :=  Makefile Makefile.local\n",
+        "shell": "# makefile\nSHELL = /bin/sh\n# default\n.SHELLFLAGS := -c\n",
         "extra": "",
         "build": rule("build", recipes["build"]),
         "test": rule("test", recipes["test"]),
@@ -65,24 +68,43 @@ def database(**parts):
     return "# GNU Make 4.4.1\n\n" + "\n".join(default.values())
 
 
+NO_RULE = f"make: *** No rule to make target '{GOAL}'.  Stop."
+
+
 def check(
-    tmp_path, db, stderr=f"make: *** No rule to make target '{GOAL}'.  Stop.", rc=2
+    tmp_path, db, stderr=NO_RULE, rc=2, files=(), make_name="make", env_make=None
 ):
+    """Run the checker in a repo copy, on a stand-in make that prints `db`.
+
+    The stand-in refuses (exit 9) unless it is called as the checker must call it: with no
+    MAKEFLAGS from the parent make, in the C locale, and with -qp and -o for both makefiles.
+    """
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
     shutil.copytree(ROOT / "scripts" / "build-pins", repo / "scripts" / "build-pins")
     shutil.copy(ROOT / "scripts" / "check-build-pins.sh", repo / "scripts")
     (repo / "Makefile").write_text("")
+    for name in files:
+        (repo / name).write_text("include Makefile\n")
     (tmp_path / "db.txt").write_text(db)
     (tmp_path / "err.txt").write_text(stderr + "\n" if stderr else "")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    make = bin_dir / "make"
+    make = bin_dir / make_name
     make.write_text(
-        f'#!/bin/sh\ncat "{tmp_path}/db.txt"\ncat "{tmp_path}/err.txt" >&2\nexit {rc}\n'
+        "#!/bin/sh\n"
+        '[ -z "${MAKEFLAGS+x}" ] && [ "${LC_ALL-}" = C ] || exit 9\n'
+        f'[ "$*" = "-qp -o Makefile -o Makefile.local {GOAL}" ] || exit 9\n'
+        f'cat "{tmp_path}/db.txt"\ncat "{tmp_path}/err.txt" >&2\nexit {rc}\n'
     )
     make.chmod(0o755)
-    env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "MAKEFLAGS": "k"}
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "MAKEFLAGS": "k",
+        "LANGUAGE": "de",
+    }
+    if env_make:
+        env["BUILD_PINS_MAKE"] = env_make
     result = subprocess.run(
         ["/bin/sh", "scripts/check-build-pins.sh"],
         cwd=repo,
@@ -98,6 +120,66 @@ def test_the_pinned_build_passes(tmp_path):
     rc, out = check(tmp_path, database())
     assert rc == 0, out
     assert "make builds and tests with the pinned tools and image" in out
+
+
+def test_the_make_that_runs_the_leg_is_asked(tmp_path):
+    # A Mac's /usr/bin/make is 3.81; the leg runs under gmake and passes it in.
+    rc, out = check(
+        tmp_path,
+        database(),
+        stderr=NO_RULE.replace("make:", "gmake:"),
+        make_name="gmake",
+        env_make="gmake",
+    )
+    assert rc == 0, out
+
+
+def test_a_warning_while_the_makefile_is_read_is_no_failure(tmp_path):
+    rc, out = check(tmp_path, database(), stderr="Makefile:9: a note\n" + NO_RULE)
+    assert rc == 0, out
+
+
+def test_a_make_that_does_not_end_on_the_missing_goal_fails(tmp_path):
+    rc, out = check(
+        tmp_path, database(), stderr="make: *** Makefile:3: missing separator.  Stop."
+    )
+    assert rc == 1
+    assert "make could not print its database" in out
+
+
+def test_a_remade_makefile_fails(tmp_path):
+    rc, out = check(tmp_path, database() + "\n" + database())
+    assert rc == 1
+    assert "remade a makefile" in out
+
+
+def test_a_makefile_make_reads_first_fails(tmp_path):
+    for name in ("GNUmakefile", "makefile"):
+        rc, out = check(tmp_path / name, database(), files=[name])
+        assert rc == 1
+        assert f"{name} is present" in out
+
+
+def test_another_makefile_read_fails(tmp_path):
+    makefiles = "# makefile\nMAKEFILE_LIST :=  Makefile Makefile.local mk/extra.mk\n"
+    rc, out = check(tmp_path, database(makefiles=makefiles))
+    assert rc == 1
+    assert "makefiles beyond Makefile and Makefile.local" in out
+
+
+def test_special_targets_that_change_how_recipes_run_fail(tmp_path):
+    for special in (".IGNORE: test", ".ONESHELL:", ".POSIX:"):
+        extra = f"{special}\n#  Implicit rule search has not been done.\n"
+        rc, out = check(tmp_path / special[1:4], database(extra=extra))
+        assert rc == 1
+        assert "special targets that change how recipes run" in out
+
+
+def test_another_shell_fails(tmp_path):
+    shell = "# makefile (from 'Makefile', line 3)\nSHELL := /bin/bash\n# default\n.SHELLFLAGS := -c\n"
+    rc, out = check(tmp_path, database(shell=shell))
+    assert rc == 1
+    assert "SHELL is not make's own SHELL = /bin/sh" in out
 
 
 def test_a_target_specific_image_fails(tmp_path):
@@ -176,36 +258,8 @@ def test_a_gate_without_this_leg_fails(tmp_path):
     assert "does not run build-pins" in out
 
 
-def test_a_make_warning_or_error_fails(tmp_path):
-    warning = "Makefile:9: warning: overriding recipe for target 'test'\n" + (
-        f"make: *** No rule to make target '{GOAL}'.  Stop."
-    )
-    rc, out = check(tmp_path, database(), stderr=warning)
+def test_a_second_setting_of_the_legs_fails(tmp_path):
+    extra = "# makefile (from 'Makefile', line 1705)\ncheck: CHECK_LEGS = lint mypy arch audit gitleaks build-pins\n"
+    rc, out = check(tmp_path, database(extra=extra))
     assert rc == 1
-    assert "make could not print its database" in out
-
-
-def test_the_parent_makes_flags_do_not_reach_the_database(tmp_path):
-    repo_bin = tmp_path / "bin"
-    rc, out = check(tmp_path, database())
-    assert rc == 0, out
-    # The stand-in records nothing, so prove the script unsets them: a make that fails on MAKEFLAGS.
-    (repo_bin / "make").write_text(
-        f'#!/bin/sh\n[ -z "${{MAKEFLAGS+x}}" ] || exit 9\ncat "{tmp_path}/db.txt"\n'
-        f'cat "{tmp_path}/err.txt" >&2\nexit 2\n'
-    )
-    rc, out = check_again(tmp_path)
-    assert rc == 0, out
-
-
-def check_again(tmp_path):
-    env = {"PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "MAKEFLAGS": "k"}
-    result = subprocess.run(
-        ["/bin/sh", "scripts/check-build-pins.sh"],
-        cwd=tmp_path / "repo",
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.returncode, result.stdout + result.stderr
+    assert "CHECK_LEGS has more than one setting" in out

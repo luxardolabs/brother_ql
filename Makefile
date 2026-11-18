@@ -1603,11 +1603,12 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 build: ## Build the sdist + wheel in Docker (hatchling; version from VERSION)
 	$(call BUILD_ARTIFACTS,$(CHECKOUT))
 
-# A leg of `make check`. It asks make itself (`make -qp`, which runs nothing) what builds and tests
-# the artifacts, and fails unless it is the pinned build; scripts/check-build-pins.sh says what it
-# checks. Changing the build or test recipe on purpose means updating scripts/build-pins/ with it.
+# A leg of `make check`. It asks this make itself (`make -qp`, which runs none of the Makefile's
+# recipes) what builds and tests the artifacts, and fails unless it is the pinned build;
+# scripts/check-build-pins.sh says what it checks. Changing the build or test recipe on purpose
+# means updating scripts/build-pins/ with it.
 build-pins: ## Check, from make's own database, that the artifacts are built and tested as pinned
-	@/bin/sh scripts/check-build-pins.sh
+	@BUILD_PINS_MAKE='$(subst ','\'',$(MAKE_COMMAND))' /bin/sh scripts/check-build-pins.sh
 
 # Recompiles the pinned build tools from requirements/build.in, with hashes. Rerun to take a newer
 # build or hatchling, then run `make test` and `make build` on the result before committing it.
