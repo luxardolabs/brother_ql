@@ -45,7 +45,7 @@ LUX_REGISTRY ?=
 # `make guard-upgrade` bumps every pin and prints what newly bites. Keep the `:=` form —
 # guard-upgrade's sed rewrites exactly these three lines.
 LUXARCH_VERSION  := 0.371.0
-LUXLINT_VERSION  := 0.79.1
+LUXLINT_VERSION  := 0.80.0
 LUXAUDIT_VERSION := 0.19.0
 
 LUXARCH_IMAGE  ?= $(LUX_REGISTRY)/luxardolabs/luxarch:$(LUXARCH_VERSION)
