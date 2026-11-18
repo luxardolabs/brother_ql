@@ -10,7 +10,7 @@ Everything runs in Docker. There is no local virtualenv to set up, and no host t
 make check    # the full gate, in canonical order
 ```
 
-`check` runs `guard-version-check` and `honest` first, and either one failing stops it. It then runs every leg of `lint mypy test arch audit gitleaks`, even past a failure, and fails at the end naming each red leg.
+`check` runs `guard-version-check` and `honest` first, and either one failing stops it. It then runs every leg of `lint mypy test arch audit gitleaks build-pins`, even past a failure, and fails at the end naming each red leg.
 
 The guards come from a private registry, so `make check` and `make release` need `LUX_REGISTRY` in `Makefile.local` and refuse without it, because a gate of skips has judged nothing. With it unset, `lint`, `mypy`, `test`, `arch`, `audit`, `format`, `status`, `honest`, `guard-version-check`, `onboard-check` and `onboard-guards` run on their own skip with a message, and `gitleaks` and `gitleaks-staged` fail on the image name. Run the Makefile from its own directory or with `make -C <dir>`: `make -f <path>` from elsewhere is refused.
 
@@ -28,6 +28,7 @@ The guards come from a private registry, so `make check` and `make release` need
 | `make audit-lock`    | recompile `requirements/audit.txt` to the newest admitted releases |
 | `make build`         | build the sdist + wheel with the pinned build tools                |
 | `make build-lock`    | recompile `requirements/build.txt` (build + hatchling, hashed)     |
+| `make build-pins`    | check from make's own database that the build is pinned            |
 | `make release`       | the library release ritual — see [Releases](#releases)             |
 
 `make help` lists them all.
@@ -38,9 +39,9 @@ The guards come from a private registry, so `make check` and `make release` need
 make test
 ```
 
-The suite builds a wheel in a throwaway container with the same pinned tools as `make build`, installs it, and runs against it, so it exercises the artifact a user would get rather than the working tree. Running `pytest` directly will not work: the canonical config requires pytest-asyncio, and the tests import `brother_ql` as an installed package.
+`make test` builds a wheel in a throwaway container with the same pinned tools as `make build`, then installs it in a second container and runs the suite against it there. That container sees the repository with `src/` hidden under an empty tmpfs, so the suite exercises the artifact a user would get and can reach the working tree by no import, path or subprocess. Running `pytest` directly will not work: the canonical config requires pytest-asyncio, and the tests import `brother_ql` as an installed package.
 
-The suite is 375 tests across 15 files, covering that the package under test is the installed wheel, conversion, labels and models, raster generation and the bytes a printer receives, image processing, positioning, config-override precedence, the CLI, end-to-end byte generation, the dependency floors, the release preflight script, and the text of the Makefile's recipes. The suite's image has no `make`, so the Makefile tests read its text: they pin each recipe's shape and do not run it.
+The suite is 385 tests across 16 files, covering that the package under test is the installed wheel, the build-pins check, conversion, labels and models, raster generation and the bytes a printer receives, image processing, positioning, config-override precedence, the CLI, end-to-end byte generation, the dependency floors, the release preflight script, and the text of the Makefile's recipes. The suite's image has no `make`, so the Makefile tests read its text: they pin each recipe's shape and do not run it.
 
 The coverage floor is `[test].coverage_min = 90` in `.luxlint.toml`, set from a measured 90% branch coverage. `make test` enforces it: it runs the suite under branch coverage (`COVERAGE_CORE=sysmon`) against the installed package, then feeds `coverage report` to `luxlint --coverage-ratchet`. A failing test or coverage below the floor fails `make test`. Raise the floor when coverage rises, and never lower it.
 
@@ -66,6 +67,7 @@ src/brother_ql/
     └── models.json       # Bundled printer definitions
 
 tests/
+├── test_build_pins.py          # The build-pins check, on a stand-in make
 ├── test_cli.py                 # CLI behaviour and config discovery
 ├── test_config_overrides.py    # Merge precedence and partial overrides
 ├── test_conversion.py          # Conversion tests
@@ -89,7 +91,7 @@ tests/
 
 `requirements/audit.txt` is a compiled, audit-only pin of those ranges so the dependency scanner has concrete versions to check. Nothing installs from it. `make audit-lock` resolves the newest release each range admits (`uv pip compile --upgrade`), so run it whenever `[project].dependencies` changes and before trusting a clean `make audit`: a stale compile is a stale audit.
 
-What builds the artifacts is pinned by the commit, not chosen at build time. `requirements/build.txt` pins `build`, `hatchling` and their dependencies with hashes, compiled from `requirements/build.in` by `make build-lock`. `make build`, `make release` and `make test` install it with `--require-hashes` and build without an isolated environment, so `[build-system].requires` is never resolved from the network. The test and build image `TAIL_IMAGE` is pinned by digest in one `override` definition, and the recipe tests refuse any second definition, target-specific ones included, so the build cannot run on another image than the suite's. The Makefile comment beside it says how to move it. The suite fails if any test imports code from `src/` rather than the installed wheel. Unlike `audit.txt` this is an install input, and `make audit` scans it too. To take a newer build tool, run `make build-lock`, then `make test` and `make build`, and commit the result.
+What builds the artifacts is pinned by the commit, not chosen at build time. `requirements/build.txt` pins `build`, `hatchling` and their dependencies with hashes, compiled from `requirements/build.in` by `make build-lock`. `make build`, `make release` and `make test` install it with `--require-hashes` and build without an isolated environment, so `[build-system].requires` is never resolved from the network. The test and build image `TAIL_IMAGE` is pinned by digest in one `override` definition; the Makefile comment beside it says how to move it. `make build-pins`, a leg of `make check`, asks make itself what it will use: it reads make's database (`make -qp` with a goal no rule makes, which runs nothing) and fails unless `TAIL_IMAGE`, `PIN_BUILD_TOOLS`, `BUILD_ARTIFACTS` and `CHECKOUT` each have one setting, the Makefile's own `override`, with no target- or pattern-specific setting; unless the recipes make runs for `build` and `test` are `scripts/build-pins/build.recipe` and `test.recipe`; and unless the release builds through `BUILD_ARTIFACTS` alone. Changing either recipe on purpose means updating its `.recipe` file in the same commit. Unlike `audit.txt` this is an install input, and `make audit` scans it too. To take a newer build tool, run `make build-lock`, then `make test` and `make build`, and commit the result.
 
 ## Releases
 

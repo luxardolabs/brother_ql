@@ -7,24 +7,17 @@ Copyright (C) 2025 Luxardo Labs
 Licensed under GPL-3.0-or-later
 """
 
-import re
 from pathlib import Path
 
 MAKEFILE = (Path(__file__).resolve().parent.parent / "Makefile").read_text()
 
 
 def recipe(target):
-    """The logical recipe lines of a target, backslash continuations joined.
-
-    A blank or comment line does not end a recipe for make, which runs the tab lines after it, so
-    the recipe runs to the next line that is neither.
-    """
+    """The logical recipe lines of a target, backslash continuations joined."""
     lines = MAKEFILE.splitlines()
     start = next(i for i, line in enumerate(lines) if line.startswith(f"{target}:"))
     logical, current = [], ""
     for line in lines[start + 1 :]:
-        if not current and (not line.strip() or line.startswith("#")):
-            continue
         if not line.startswith("\t") and not current:
             break
         current += line.lstrip("\t")
@@ -37,60 +30,10 @@ def recipe(target):
 
 
 def definition(name):
-    """The one line that defines a make variable, refusing a name defined more than once.
-
-    make keeps the last of several definitions, so a test reading only the first would pass while
-    make uses another. Every form counts: any assignment operator, a target-specific setting, and
-    `override`, `export`, `private` and `define` in any order. A bare `export NAME` assigns nothing.
-    """
-    assignment = re.compile(
-        rf"^(?:[^\t#][^=]*:\s*)?(?P<mods>(?:(?:override|export|private|define)\s+)*)"
-        rf"{re.escape(name)}\s*(?P<op>(?::::|::|[:+?!])?=)?(?:\s|$)"
+    """The one line that defines a make variable."""
+    return next(
+        line for line in MAKEFILE.splitlines() if line.startswith(f"override {name} =")
     )
-    found = []
-    for line in logical_lines():
-        match = assignment.match(line)
-        if (
-            match
-            and not line.startswith(("\t", "#"))
-            and (match["op"] or "define" in match["mods"].split())
-        ):
-            found.append(line)
-    assert len(found) == 1, f"{name} is defined {len(found)} times: {found}"
-    assert found[0].startswith(f"override {name} ="), found[0]
-    return found[0]
-
-
-def logical_lines():
-    """The Makefile's lines as make reads them: backslash continuations joined, blanks folded."""
-    logical, current = [], ""
-    for line in MAKEFILE.splitlines():
-        if current:
-            line = " " + line.lstrip()
-        current += line
-        if current.endswith("\\"):
-            current = current[:-1].rstrip()
-            continue
-        logical.append(current)
-        current = ""
-    return logical
-
-
-def container_command(target):
-    """A target's `docker run` up to its image, whitespace folded: what the container is given."""
-    text = "\n".join(recipe(target))
-    return " ".join(text.split("docker run", 1)[1].split("$(TAIL_IMAGE)", 1)[0].split())
-
-
-def container_steps_of(text):
-    """The `&&` steps of the `sh -c` script the TAIL_IMAGE container runs, whitespace folded."""
-    script = text.split("$(TAIL_IMAGE) ", 1)[1].split("sh -c '", 1)[1].split("'", 1)[0]
-    return [" ".join(step.split()) for step in script.split("&&")]
-
-
-def container_steps(target):
-    """The container script's steps in a target's recipe."""
-    return container_steps_of("\n".join(recipe(target)))
 
 
 def test_recipes_mount_the_checkout_through_the_quoted_definition():
@@ -107,42 +50,6 @@ def test_recipes_mount_the_checkout_through_the_quoted_definition():
     )
 
 
-def test_artifacts_are_built_by_the_hash_pinned_tools_of_the_commit():
-    assert definition("PIN_BUILD_TOOLS") == (
-        "override PIN_BUILD_TOOLS = pip install -q --root-user-action=ignore --no-deps"
-        " --require-hashes -r requirements/build.txt >/dev/null"
-    )
-    assert container_steps_of(definition("BUILD_ARTIFACTS")) == [
-        "$(PIN_BUILD_TOOLS)",
-        "python -m build --no-isolation --outdir dist",
-    ]
-
-
-def test_the_suite_and_the_build_each_run_one_container():
-    assert "\n".join(recipe("test")).count("$(TAIL_IMAGE)") == 1
-    assert recipe("build") == ["$(call BUILD_ARTIFACTS,$(CHECKOUT))"]
-
-
-def test_the_suite_tests_a_wheel_the_pinned_tools_built_in_a_clean_image():
-    # The container is given nothing that could put the tree ahead of the wheel (a PYTHONPATH).
-    assert container_command("test") == (
-        '--rm $(guard_caps) -v $(CHECKOUT):/repo:ro -w /repo -v "$$D":/out'
-        " -e PYTHONDONTWRITEBYTECODE=1"
-    )
-    # pip skips the hash of a requirement already installed at its pinned version, so the pinned
-    # set goes in first; nothing installs the tree itself, so the suite tests that wheel alone.
-    assert container_steps("test") == [
-        "$(PIN_BUILD_TOOLS)",
-        "python -m build -q --no-isolation --wheel --outdir /tmp/wheel . >/dev/null",
-        "pip install -q --root-user-action=ignore pytest pytest-asyncio coverage >/dev/null",
-        "pip install -q --root-user-action=ignore /tmp/wheel/*.whl >/dev/null",
-        "export COVERAGE_CORE=sysmon COVERAGE_FILE=/out/.coverage",
-        "python -m coverage run --branch --source=brother_ql -m pytest -c /out/pytest.ini"
-        " --rootdir=/repo -p no:cacheprovider",
-        "python -m coverage report --precision=2 > /out/coverage.txt",
-    ]
-
-
 def test_the_pinned_build_set_hashes_every_requirement():
     text = (
         Path(__file__).resolve().parent.parent / "requirements" / "build.txt"
@@ -152,13 +59,6 @@ def test_the_pinned_build_set_hashes_every_requirement():
     assert {"build", "hatchling"} <= names
     for line in requirements:
         assert "==" in line and line.endswith("\\"), line
-
-
-def test_the_test_and_build_image_is_pinned_by_digest():
-    # One `override` definition: a later one, a target-specific one or Makefile.local cannot move
-    # the build to another image than the suite's.
-    image = definition("TAIL_IMAGE").split(" = ", 1)[1]
-    assert re.fullmatch(r"python:3\.14-slim@sha256:[0-9a-f]{64}", image), image
 
 
 def test_the_suite_holds_its_slot_in_the_recipe_shell_and_runs_capped():

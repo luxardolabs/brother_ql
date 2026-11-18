@@ -1,0 +1,1 @@
+	$(call BUILD_ARTIFACTS,$(CHECKOUT))

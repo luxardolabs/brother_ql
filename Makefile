@@ -318,7 +318,7 @@ override REFUSE_IGNORED = $(if $(filter-out default,$(origin MAKE_COMMAND))$(sub
 
 # Setting: the legs, in order, set in the makefile. An app repo's are exactly these; a repo with more
 # legs (a guard's own parity suite) appends them. Removing one reds repo.makefile_canonical ----------
-CHECK_LEGS ?= lint mypy test arch audit gitleaks
+CHECK_LEGS ?= lint mypy test arch audit gitleaks build-pins
 unexport CHECK_LEGS
 
 check: override MAKEOVERRIDES :=
@@ -446,6 +446,9 @@ format: ## Apply every canonical formatter in place (luxlint --format) — write
 # - the config lives in the run's own temp dir, never the repo root, so two runs in one
 #   tree cannot delete each other's config mid-run;
 # - the source is mounted read-only with PYTHONDONTWRITEBYTECODE, so nothing lands in it;
+# - the wheel is built in a container of its own with the pinned build tools (what `make build`
+#   builds), and the suite's container sees the repo with src/ hidden under an empty tmpfs, so no
+#   import, runpy, exec or subprocess can test the tree in the wheel's place;
 # - `coverage report --precision=2`: a whole-percent report rounds 89.5% up to "90%" and
 #   passes a floor of 90;
 # - a run alone holds one of the machine's heavy-job slots, and inside `check` shares the gate's;
@@ -454,9 +457,11 @@ test: ## pytest against the INSTALLED package (canonical config), then the cover
 	@set +e; $(SKIP_NO_REGISTRY); $(guard_slot); D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT; trap 'exit 130' INT TERM HUP; \
 	$(GUARD_RUN) $(LUXLINT_IMAGE) --emit-config pytest > "$$D/pytest.ini" || exit 2; \
 	docker run --rm $(guard_caps) -v $(CHECKOUT):/repo:ro -w /repo -v "$$D":/out -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) \
-	  sh -c '$(PIN_BUILD_TOOLS) && python -m build -q --no-isolation --wheel --outdir /tmp/wheel . >/dev/null \
-	         && pip install -q --root-user-action=ignore pytest pytest-asyncio coverage >/dev/null \
-	         && pip install -q --root-user-action=ignore /tmp/wheel/*.whl >/dev/null \
+	  sh -c '$(PIN_BUILD_TOOLS) && python -m build -q --no-isolation --wheel --outdir /out/wheel . >/dev/null' \
+	  || { echo "$@: the wheel did not build with the pinned build tools" >&2; exit 2; }; \
+	docker run --rm $(guard_caps) -v $(CHECKOUT):/repo:ro --mount type=tmpfs,destination=/repo/src -w /repo -v "$$D":/out -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) \
+	  sh -c 'pip install -q --root-user-action=ignore pytest pytest-asyncio coverage >/dev/null \
+	         && pip install -q --root-user-action=ignore /out/wheel/*.whl >/dev/null \
 	         && export COVERAGE_CORE=sysmon COVERAGE_FILE=/out/.coverage \
 	         && python -m coverage run --branch --source=brother_ql -m pytest -c /out/pytest.ini --rootdir=/repo -p no:cacheprovider \
 	         && python -m coverage report --precision=2 > /out/coverage.txt'; rc=$$?; \
@@ -1598,6 +1603,12 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 build: ## Build the sdist + wheel in Docker (hatchling; version from VERSION)
 	$(call BUILD_ARTIFACTS,$(CHECKOUT))
 
+# A leg of `make check`. It asks make itself (`make -qp`, which runs nothing) what builds and tests
+# the artifacts, and fails unless it is the pinned build; scripts/check-build-pins.sh says what it
+# checks. Changing the build or test recipe on purpose means updating scripts/build-pins/ with it.
+build-pins: ## Check, from make's own database, that the artifacts are built and tested as pinned
+	@/bin/sh scripts/check-build-pins.sh
+
 # Recompiles the pinned build tools from requirements/build.in, with hashes. Rerun to take a newer
 # build or hatchling, then run `make test` and `make build` on the result before committing it.
 build-lock: ## Recompile requirements/build.txt (build + hatchling, hash-pinned) from requirements/build.in
@@ -1687,4 +1698,4 @@ help: ## Show this help
 	  /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 	@echo
 
-.PHONY: onboard-check onboard-guards honest lint mypy arch audit audit-lock format test release build build-lock status guard-version-check guard-upgrade help
+.PHONY: onboard-check onboard-guards honest lint mypy arch audit audit-lock format test release build build-lock build-pins status guard-version-check guard-upgrade help
