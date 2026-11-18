@@ -14,11 +14,17 @@ MAKEFILE = (Path(__file__).resolve().parent.parent / "Makefile").read_text()
 
 
 def recipe(target):
-    """The logical recipe lines of a target, backslash continuations joined."""
+    """The logical recipe lines of a target, backslash continuations joined.
+
+    A blank or comment line does not end a recipe for make, which runs the tab lines after it, so
+    the recipe runs to the next line that is neither.
+    """
     lines = MAKEFILE.splitlines()
     start = next(i for i, line in enumerate(lines) if line.startswith(f"{target}:"))
     logical, current = [], ""
     for line in lines[start + 1 :]:
+        if not current and (not line.strip() or line.startswith("#")):
+            continue
         if not line.startswith("\t") and not current:
             break
         current += line.lstrip("\t")
@@ -34,17 +40,22 @@ def definition(name):
     """The one line that defines a make variable, refusing a name defined more than once.
 
     make keeps the last of several definitions, so a test reading only the first would pass while
-    make uses another. Every form counts: any assignment operator, `override`, `export`, a
-    target-specific setting and `define`.
+    make uses another. Every form counts: any assignment operator, a target-specific setting, and
+    `override`, `export`, `private` and `define` in any order. A bare `export NAME` assigns nothing.
     """
     assignment = re.compile(
-        rf"^(?:[^\t#][^=]*:\s*)?(?:override\s+)?(?:export\s+)?(?:define\s+)?{re.escape(name)}\s*(?:[:+?!]|::|:::)?=?(?:\s|$)"
+        rf"^(?:[^\t#][^=]*:\s*)?(?P<mods>(?:(?:override|export|private|define)\s+)*)"
+        rf"{re.escape(name)}\s*(?P<op>(?::::|::|[:+?!])?=)?(?:\s|$)"
     )
-    found = [
-        line
-        for line in logical_lines()
-        if assignment.match(line) and not line.startswith(("\t", "#"))
-    ]
+    found = []
+    for line in logical_lines():
+        match = assignment.match(line)
+        if (
+            match
+            and not line.startswith(("\t", "#"))
+            and (match["op"] or "define" in match["mods"].split())
+        ):
+            found.append(line)
     assert len(found) == 1, f"{name} is defined {len(found)} times: {found}"
     assert found[0].startswith(f"override {name} ="), found[0]
     return found[0]
@@ -105,6 +116,11 @@ def test_artifacts_are_built_by_the_hash_pinned_tools_of_the_commit():
         "$(PIN_BUILD_TOOLS)",
         "python -m build --no-isolation --outdir dist",
     ]
+
+
+def test_the_suite_and_the_build_each_run_one_container():
+    assert "\n".join(recipe("test")).count("$(TAIL_IMAGE)") == 1
+    assert recipe("build") == ["$(call BUILD_ARTIFACTS,$(CHECKOUT))"]
 
 
 def test_the_suite_tests_a_wheel_the_pinned_tools_built_in_a_clean_image():

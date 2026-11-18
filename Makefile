@@ -232,8 +232,9 @@ override guard_slot_body = gs_d=$$1 gs_n=$$2 gs_job=$$3; shift 3; \
 # The test/build base. Matches requires-python (>=3.14) and .luxlint.toml [python].target,
 # so the suite runs on the interpreter the code targets (luxarch repo.python_version_consistent).
 # Pinned by digest, so the interpreter and pip that test and build an artifact are the commit's
-# choice, not the tag's on the day; an `override`, so no later, target-specific or local setting
-# gives the build another image than the suite's. To move it: `docker pull python:3.14-slim`,
+# choice, not the tag's on the day. `override` beats a later plain setting, the environment and the
+# command line; a target-specific setting would still win for its targets, so the recipe tests
+# refuse any second definition of this name. To move it: `docker pull python:3.14-slim`,
 # then put the digest `docker image inspect python:3.14-slim --format '{{index .RepoDigests 0}}'`
 # prints here.
 override TAIL_IMAGE = python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
