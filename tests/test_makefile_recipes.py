@@ -7,6 +7,7 @@ Copyright (C) 2025 Luxardo Labs
 Licensed under GPL-3.0-or-later
 """
 
+import re
 from pathlib import Path
 
 MAKEFILE = (Path(__file__).resolve().parent.parent / "Makefile").read_text()
@@ -30,10 +31,34 @@ def recipe(target):
 
 
 def definition(name):
-    """The one line that defines a make variable."""
-    return next(
-        line for line in MAKEFILE.splitlines() if line.startswith(f"override {name} =")
+    """The one line that defines a make variable, refusing a name defined more than once.
+
+    make keeps the last of several definitions, so a test reading only the first would pass while
+    make uses another. Every form counts: any assignment operator, `override`, `export`, a
+    target-specific setting and `define`.
+    """
+    assignment = re.compile(
+        rf"^(?:[^\t#][^=]*:\s*)?(?:override\s+)?(?:export\s+)?(?:define\s+)?{re.escape(name)}\s*(?:[:+?!]|::|:::)?=?(?:\s|$)"
     )
+    found = [
+        line
+        for line in MAKEFILE.splitlines()
+        if assignment.match(line) and not line.startswith(("\t", "#"))
+    ]
+    assert len(found) == 1, f"{name} is defined {len(found)} times: {found}"
+    assert found[0].startswith(f"override {name} ="), found[0]
+    return found[0]
+
+
+def container_steps_of(text):
+    """The `&&` steps of the `sh -c` script the TAIL_IMAGE container runs, whitespace folded."""
+    script = text.split("$(TAIL_IMAGE) ", 1)[1].split("sh -c '", 1)[1].split("'", 1)[0]
+    return [" ".join(step.split()) for step in script.split("&&")]
+
+
+def container_steps(target):
+    """The container script's steps in a target's recipe."""
+    return container_steps_of("\n".join(recipe(target)))
 
 
 def test_recipes_mount_the_checkout_through_the_quoted_definition():
@@ -51,24 +76,29 @@ def test_recipes_mount_the_checkout_through_the_quoted_definition():
 
 
 def test_artifacts_are_built_by_the_hash_pinned_tools_of_the_commit():
-    pin = definition("PIN_BUILD_TOOLS")
-    assert "--no-deps --require-hashes -r requirements/build.txt" in pin
-    build = definition("BUILD_ARTIFACTS")
-    assert (
-        "'$(PIN_BUILD_TOOLS) && python -m build --no-isolation --outdir dist'" in build
+    assert definition("PIN_BUILD_TOOLS") == (
+        "override PIN_BUILD_TOOLS = pip install -q --root-user-action=ignore --no-deps"
+        " --require-hashes -r requirements/build.txt >/dev/null"
     )
-    # The suite tests a wheel built by the same pinned tools, and installs nothing from the tree.
-    suite = "\n".join(recipe("test"))
-    assert (
-        "$(PIN_BUILD_TOOLS) && python -m build -q --no-isolation --wheel --outdir /tmp/wheel ."
-        in suite
-    )
-    assert "pip install -q --root-user-action=ignore /tmp/wheel/*.whl" in suite
-    assert "pip install -q --root-user-action=ignore . " not in suite
+    assert container_steps_of(definition("BUILD_ARTIFACTS")) == [
+        "$(PIN_BUILD_TOOLS)",
+        "python -m build --no-isolation --outdir dist",
+    ]
+
+
+def test_the_suite_tests_a_wheel_the_pinned_tools_built_in_a_clean_image():
     # pip skips the hash of a requirement already installed at its pinned version, so the pinned
-    # set goes into a clean environment: before anything else is installed there.
-    first = suite.split("$(TAIL_IMAGE) ", 1)[1].split("sh -c '", 1)[1]
-    assert first.startswith("$(PIN_BUILD_TOOLS) && python -m build"), first[:80]
+    # set goes in first; nothing installs the tree itself, so the suite tests that wheel alone.
+    assert container_steps("test") == [
+        "$(PIN_BUILD_TOOLS)",
+        "python -m build -q --no-isolation --wheel --outdir /tmp/wheel . >/dev/null",
+        "pip install -q --root-user-action=ignore pytest pytest-asyncio coverage >/dev/null",
+        "pip install -q --root-user-action=ignore /tmp/wheel/*.whl >/dev/null",
+        "export COVERAGE_CORE=sysmon COVERAGE_FILE=/out/.coverage",
+        "python -m coverage run --branch --source=brother_ql -m pytest -c /out/pytest.ini"
+        " --rootdir=/repo -p no:cacheprovider",
+        "python -m coverage report --precision=2 > /out/coverage.txt",
+    ]
 
 
 def test_the_pinned_build_set_hashes_every_requirement():
