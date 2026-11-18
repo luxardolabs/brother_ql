@@ -65,6 +65,10 @@ def test_artifacts_are_built_by_the_hash_pinned_tools_of_the_commit():
     )
     assert "pip install -q --root-user-action=ignore /tmp/wheel/*.whl" in suite
     assert "pip install -q --root-user-action=ignore . " not in suite
+    # pip skips the hash of a requirement already installed at its pinned version, so the pinned
+    # set goes into a clean environment: before anything else is installed there.
+    first = suite.split("$(TAIL_IMAGE) ", 1)[1].split("sh -c '", 1)[1]
+    assert first.startswith("$(PIN_BUILD_TOOLS) && python -m build"), first[:80]
 
 
 def test_the_pinned_build_set_hashes_every_requirement():

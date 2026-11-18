@@ -451,8 +451,8 @@ test: ## pytest against the INSTALLED package (canonical config), then the cover
 	@set +e; $(SKIP_NO_REGISTRY); $(guard_slot); D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT; trap 'exit 130' INT TERM HUP; \
 	$(GUARD_RUN) $(LUXLINT_IMAGE) --emit-config pytest > "$$D/pytest.ini" || exit 2; \
 	docker run --rm $(guard_caps) -v $(CHECKOUT):/repo:ro -w /repo -v "$$D":/out -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) \
-	  sh -c 'pip install -q --root-user-action=ignore pytest pytest-asyncio coverage >/dev/null \
-	         && $(PIN_BUILD_TOOLS) && python -m build -q --no-isolation --wheel --outdir /tmp/wheel . >/dev/null \
+	  sh -c '$(PIN_BUILD_TOOLS) && python -m build -q --no-isolation --wheel --outdir /tmp/wheel . >/dev/null \
+	         && pip install -q --root-user-action=ignore pytest pytest-asyncio coverage >/dev/null \
 	         && pip install -q --root-user-action=ignore /tmp/wheel/*.whl >/dev/null \
 	         && export COVERAGE_CORE=sysmon COVERAGE_FILE=/out/.coverage \
 	         && python -m coverage run --branch --source=brother_ql -m pytest -c /out/pytest.ini --rootdir=/repo -p no:cacheprovider \
