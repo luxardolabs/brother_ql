@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-GOAL = "__build_pins_no_such_goal__"
+GOAL = "__build_pins_database__"
 DIGEST = "9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f"
 PIN = (
     "pip install -q --root-user-action=ignore --no-deps --require-hashes"
@@ -59,25 +59,25 @@ def database(**parts):
         "makefiles": "# makefile (from 'Makefile.local', line 1)\n"
         "MAKEFILE_LIST :=  Makefile Makefile.local\n",
         "shell": "# makefile\nSHELL = /bin/sh\n# default\n.SHELLFLAGS := -c\n",
+        "flags": "# makefile\nMAKEFLAGS = pq $(-*-eval-flags-*-)\n",
         "extra": "",
         "build": rule("build", recipes["build"]),
         "test": rule("test", recipes["test"]),
         "release": rule("release", '@set -e; $(call BUILD_ARTIFACTS,"$$D"); git tag'),
     }
     default.update(parts)
-    return "# GNU Make 4.4.1\n\n" + "\n".join(default.values())
+    return (
+        "# GNU Make 4.4.1\n\n# Make data base, printed on Wed Nov 18 17:17:37 2026\n\n"
+        + "\n".join(default.values())
+    )
 
 
-NO_RULE = f"make: *** No rule to make target '{GOAL}'.  Stop."
-
-
-def check(
-    tmp_path, db, stderr=NO_RULE, rc=2, files=(), make_name="make", env_make=None
-):
+def check(tmp_path, db, stderr="", rc=0, files=(), make_name="make", env_make=None):
     """Run the checker in a repo copy, on a stand-in make that prints `db`.
 
     The stand-in refuses (exit 9) unless it is called as the checker must call it: with no
-    MAKEFLAGS from the parent make, in the C locale, and with -qp and -o for both makefiles.
+    MAKEFLAGS from the parent make, in the C locale, with -qp and -o for both makefiles, and with
+    its goal given an empty rule, so no rule of the Makefile can make it.
     """
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
@@ -94,7 +94,7 @@ def check(
     make.write_text(
         "#!/bin/sh\n"
         '[ -z "${MAKEFLAGS+x}" ] && [ "${LC_ALL-}" = C ] || exit 9\n'
-        f'[ "$*" = "-qp -o Makefile -o Makefile.local {GOAL}" ] || exit 9\n'
+        f'[ "$*" = "-qp -o Makefile -o Makefile.local --eval {GOAL}: ; {GOAL}" ] || exit 9\n'
         f'cat "{tmp_path}/db.txt"\ncat "{tmp_path}/err.txt" >&2\nexit {rc}\n'
     )
     make.chmod(0o755)
@@ -124,27 +124,49 @@ def test_the_pinned_build_passes(tmp_path):
 
 def test_the_make_that_runs_the_leg_is_asked(tmp_path):
     # A Mac's /usr/bin/make is 3.81; the leg runs under gmake and passes it in.
-    rc, out = check(
-        tmp_path,
-        database(),
-        stderr=NO_RULE.replace("make:", "gmake:"),
-        make_name="gmake",
-        env_make="gmake",
-    )
+    rc, out = check(tmp_path, database(), make_name="gmake", env_make="gmake")
     assert rc == 0, out
 
 
 def test_a_warning_while_the_makefile_is_read_is_no_failure(tmp_path):
-    rc, out = check(tmp_path, database(), stderr="Makefile:9: a note\n" + NO_RULE)
+    rc, out = check(tmp_path, database(), stderr="Makefile:9: a note")
     assert rc == 0, out
 
 
-def test_a_make_that_does_not_end_on_the_missing_goal_fails(tmp_path):
+def test_an_error_from_make_fails(tmp_path):
     rc, out = check(
-        tmp_path, database(), stderr="make: *** Makefile:3: missing separator.  Stop."
+        tmp_path, database(), stderr="Makefile:3: *** missing separator.  Stop.", rc=2
     )
     assert rc == 1
     assert "make could not print its database" in out
+
+
+def test_a_banner_inside_a_define_is_no_second_database(tmp_path):
+    note = "# makefile (from 'Makefile', line 9)\ndefine NOTE\n# GNU Make 4.x or later\nendef\n"
+    rc, out = check(tmp_path, database(extra=note))
+    assert rc == 0, out
+
+
+def test_a_flag_the_makefile_adds_fails(tmp_path):
+    flags = "# makefile\nMAKEFLAGS = ipq $(-*-eval-flags-*-)\n"
+    rc, out = check(tmp_path, database(flags=flags))
+    assert rc == 1
+    assert "adds make flags that apply to every recipe: MAKEFLAGS = ipq" in out
+
+
+def test_a_mount_of_another_directory_fails(tmp_path):
+    for value in ("'$(PWD)'", "'$(CURDIR)/..'"):
+        rc, out = check(
+            tmp_path / value[3:6], database(checkout=override("CHECKOUT", value))
+        )
+        assert rc == 1
+        assert "CHECKOUT is not this checkout's directory" in out
+
+
+def test_makes_own_shell_passes_however_it_is_printed(tmp_path):
+    shell = "# default\nSHELL := /bin/sh\n# default\n.SHELLFLAGS := -c\n"
+    rc, out = check(tmp_path, database(shell=shell))
+    assert rc == 0, out
 
 
 def test_a_remade_makefile_fails(tmp_path):
@@ -179,7 +201,7 @@ def test_another_shell_fails(tmp_path):
     shell = "# makefile (from 'Makefile', line 3)\nSHELL := /bin/bash\n# default\n.SHELLFLAGS := -c\n"
     rc, out = check(tmp_path, database(shell=shell))
     assert rc == 1
-    assert "SHELL is not make's own SHELL = /bin/sh" in out
+    assert "SHELL is not make's own /bin/sh" in out
 
 
 def test_a_target_specific_image_fails(tmp_path):
