@@ -260,6 +260,31 @@ def test_an_interrupt_stops_the_recipe_shell():
     assert text.index("trap - EXIT;") < text.index("git tag --no-sign")
 
 
+def test_every_guard_target_run_alone_skips_without_a_registry():
+    for target in (
+        "lint",
+        "mypy",
+        "test",
+        "arch",
+        "audit",
+        "format",
+        "status",
+        "honest",
+        "guard-version-check",
+        "onboard-check",
+        "onboard-guards",
+    ):
+        assert "$(SKIP_NO_REGISTRY)" in "\n".join(recipe(target)), target
+
+
+def test_an_interrupt_ends_the_guard_test_and_status_recipes():
+    # A trap that only cleans up lets the shell run every later docker call after Ctrl-C.
+    for target in ("onboard-guards", "test", "status"):
+        text = "\n".join(recipe(target))
+        assert "EXIT INT TERM" not in text, target
+        assert "trap 'exit 130' INT TERM HUP;" in text, target
+
+
 def test_the_other_tree_refusal_cannot_be_overridden_and_spares_this_tree():
     text = definition("REFUSE_OTHER_TREE")
     assert "$(filter command,$(origin CURDIR))" in text

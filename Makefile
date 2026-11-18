@@ -346,7 +346,7 @@ onboard-check: ## Prove the repo is onboarded: all three guards on + honest + pr
 	[ $$fail -eq 0 ] && echo "onboard-check: all three guards on + honest + privacy wired + history clean ✓" || { echo "onboard-check FAILED"; exit 1; }
 
 onboard-guards:
-	@set +e; fail=0; A=$$(mktemp); trap 'rm -f "$$A"' EXIT INT TERM; \
+	@set +e; $(SKIP_NO_REGISTRY); fail=0; A=$$(mktemp); trap 'rm -f "$$A"' EXIT; trap 'exit 130' INT TERM HUP; \
 	$(GUARD_RUN) $(LUXARCH_IMAGE)  --version      >/dev/null || { echo "luxarch not wired"; fail=1; }; \
 	$(GUARD_RUN) $(LUXARCH_IMAGE)  --assert-scans >/dev/null 2>&1 || { echo "luxarch: a rule family scanned NOTHING (hollow green)"; fail=1; }; \
 	$(GUARD_RUN) $(LUXLINT_IMAGE)  --preflight    >/dev/null || { echo "mypy tail NOT honest (luxlint --preflight)"; fail=1; }; \
@@ -445,7 +445,7 @@ format: ## Apply every canonical formatter in place (luxlint --format) — write
 # - a run alone holds one of the machine's heavy-job slots, and inside `check` shares the gate's;
 #   the suite's container is capped like every guard run (guard_slot, guard_caps).
 test: ## pytest against the INSTALLED package (canonical config), then the coverage ratchet
-	@set +e; $(SKIP_NO_REGISTRY); $(guard_slot); D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT INT TERM; \
+	@set +e; $(SKIP_NO_REGISTRY); $(guard_slot); D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT; trap 'exit 130' INT TERM HUP; \
 	$(GUARD_RUN) $(LUXLINT_IMAGE) --emit-config pytest > "$$D/pytest.ini" || exit 2; \
 	docker run --rm $(guard_caps) -v $(CHECKOUT):/repo:ro -w /repo -v "$$D":/out -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) \
 	  sh -c 'pip install -q --root-user-action=ignore pytest pytest-asyncio coverage >/dev/null \
@@ -1598,7 +1598,7 @@ STAMP = python3 -c 'import json,sys,os; d=json.load(open(sys.argv[1])); d["commi
 
 status: ## Regenerate committed guard-status files (.lux*-status.json) — commit them
 	@$(REFUSE_OTHER_TREE)$(SKIP_NO_REGISTRY); \
-	set -e; C=$$(mktemp); trap 'rm -f "$$C"' EXIT INT TERM; \
+	set -e; C=$$(mktemp); trap 'rm -f "$$C"' EXIT; trap 'exit 130' INT TERM HUP; \
 	export SHA=$$(git rev-parse HEAD) TS=$$(date -u +%FT%TZ); \
 	$(GUARD_RUN) $(LUXLINT_IMAGE)  --json > "$$C" || true; $(STAMP) "$$C" .luxlint-status.json; \
 	$(GUARD_RUN) -e LUXARCH_STATUS_WRITE=1 $(LUXARCH_IMAGE) --json > "$$C" || true; $(STAMP) "$$C" .luxarch-status.json; \

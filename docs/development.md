@@ -1,6 +1,6 @@
 # Development
 
-*Last grounded: 2026-11-05 — brother_ql 2.0.0.*
+*Last grounded: 2026-11-18 — brother_ql 2.0.3.*
 
 Everything runs in Docker. There is no local virtualenv to set up, and no host toolchain to install — lint, types, tests, dependency audit and the secret scan all run from pinned images.
 
@@ -12,7 +12,7 @@ make check    # the full gate, in canonical order
 
 `check` runs `guard-version-check` and `honest` first, and either one failing stops it. It then runs every leg of `lint mypy test arch audit gitleaks`, even past a failure, and fails at the end naming each red leg.
 
-The guards come from a private registry, so `make check` and `make release` need `LUX_REGISTRY` in `Makefile.local` and refuse without it, because a gate of skips has judged nothing. With it unset, `lint`, `mypy`, `test`, `arch`, `audit`, `format` and `status` run on their own skip with a message, and `gitleaks` fails on the image name. Run the Makefile from its own directory or with `make -C <dir>`: `make -f <path>` from elsewhere is refused.
+The guards come from a private registry, so `make check` and `make release` need `LUX_REGISTRY` in `Makefile.local` and refuse without it, because a gate of skips has judged nothing. With it unset, `lint`, `mypy`, `test`, `arch`, `audit`, `format`, `status`, `honest`, `guard-version-check`, `onboard-check` and `onboard-guards` run on their own skip with a message, and `gitleaks` and `gitleaks-staged` fail on the image name. Run the Makefile from its own directory or with `make -C <dir>`: `make -f <path>` from elsewhere is refused.
 
 | Target               | What it does                                                       |
 | -------------------- | ------------------------------------------------------------------ |
