@@ -144,20 +144,23 @@ def test_the_gate_runs_in_a_fresh_clone_of_the_judged_commit():
     clone = gate.index('/bin/sh scripts/release-clone.sh $(RELEASE_HEAD) "$$D"')
     # set -e stops a clone that failed before the gate, and the verdict is the Known-reds judge's.
     assert "set -e; D=$$(mktemp -d)" in gate
-    # The gate's own status is recorded whatever set -e would do to the pipeline's group.
+    # The gate's own status is recorded whatever set -e would do to the pipeline's group, and its
+    # make speaks the C locale, so the judge can read each leg's make error from the log.
     run = gate.index(
-        '{ rc=0; $(MAKE) --no-print-directory check || rc=$$?; echo $$rc > "$$R"; } 2>&1 | tee "$$L";'
+        '{ rc=0; LC_ALL=C LANGUAGE= $(MAKE) --no-print-directory check || rc=$$?; echo $$rc > "$$R"; } 2>&1 | tee "$$L";'
     )
     assert clone < run
+    # The judge reads the gate's own log: a leg that reached no verdict approves nothing.
     assert gate.endswith(
-        "python3 -I scripts/release-known-reds.py $(RELEASE_VERSION) $$legs"
+        'python3 -I scripts/release-known-reds.py $(RELEASE_VERSION) $$legs < "$$L"'
     )
-    # A red gate is judged only once its legs ran, and from the status of the clone it judged.
+    # A red gate is judged only once its legs ran, and from the guards' run as the legs run them.
     assert (
         '[ -n "$$legs" ] || { echo "release: make check stopped before its legs ran'
         in gate
     )
-    assert gate.index("$(MAKE) --no-print-directory status") > run
+    assert gate.index("$(MAKE) --no-print-directory release-reds") > run
+    assert "LUXARCH_STATUS_WRITE" not in "\n".join(recipe("release-reds"))
     assert "PATH=/usr/bin:/bin" in gate[:clone]
     # Only a dry run judges where it stands, and it leaves before the clone.
     assert gate.startswith(

@@ -1,16 +1,19 @@
 """Judge the release gate's reds against the version's `### Known reds` (FLEET-RELEASE-PROCESS 0).
 
-Usage: release-known-reds.py <version> [failed leg ...]
+Usage: release-known-reds.py <version> [failed leg ...] < <the gate's log>
 
 Run by `make release` in the fresh clone of the judged commit, after its `make check`, with the legs
-that check named as failed (none when it was green) and, when it was red, the guard status files a
-`make status` of that clone wrote. A release may ship over a red only when the red is recorded in
+that check named as failed (none when it was green), the gate's own log on stdin and, when it was
+red, the guards' `--json` of that clone (`make release-reds`: .lux*-reds.json, written the way the
+gate's legs run, not in status-write mode, which hides repo.guard_status_current). A release may ship over a red only when the red is recorded in
 the version's CHANGELOG.md entry, under `### Known reds`, as a list item naming the red, the issue
 that tracks it and why it cannot be fixed here:
 
     - `luxarch repo.some_rule` - BROTHERQL-61: waits on the luxarch fix for ...
 
 Fails:
+- when a guard leg reached no verdict in the gate (its make error is not `Error 1`: a guard that
+  could not run, a container killed at its memory cap), whatever is recorded;
 - when a leg failed that no record can approve: a test, the secret scan, build-pins, or anything
   but the guard legs lint, mypy, arch and audit;
 - when a red is not recorded, or a record names no red (so the notes never list a red that shipped
@@ -36,6 +39,7 @@ APPROVABLE = {
 }
 ISSUE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 RECORD = re.compile(r"^- `([^`]+)`\s*(?:-|—|–)\s*(.*)$")
+LEG_ERROR = re.compile(r"^make\[\d+\]: \*\*\* \[Makefile:\d+: ([\w-]+)\] Error (\d+)$")
 
 
 def known_reds(changelog: str, version: str) -> tuple[dict[str, str], list[str]]:
@@ -70,23 +74,36 @@ def known_reds(changelog: str, version: str) -> tuple[dict[str, str], list[str]]
     return records, malformed
 
 
+def leg_errors(log: str) -> dict[str, list[str]]:
+    """Each leg's make error codes in the gate's log (make runs in the C locale there)."""
+    errors: dict[str, list[str]] = {}
+    for line in log.splitlines():
+        match = LEG_ERROR.match(line.strip())
+        if match:
+            errors.setdefault(match.group(1), []).append(match.group(2))
+    return errors
+
+
 def guard_reds(repo: Path) -> tuple[dict[str, str], list[str]]:
     """Every red the three guards' status files name, keyed as the records name them, and the
     problems that leave a red no record can approve: a scan that could not run, or a failure the
     guard counts but names nothing for (a stale or expired ignore row is a deferral, and blocks)."""
     reds: dict[str, str] = {}
+    rows = {"luxarch": 0, "luxlint": 0, "luxaudit": 0}
     problems: list[str] = []
-    arch = json.loads((repo / ".luxarch-status.json").read_text())
+    arch = json.loads((repo / ".luxarch-reds.json").read_text())
     for rule in arch["shared"]["rules"] + [
         r for t in arch["targets"] for r in t["rules"]
     ]:
         if rule["status"] == "FAIL" or rule.get("crashed"):
             reds[f"luxarch {rule['rule']}"] = "luxarch"
-    lint = json.loads((repo / ".luxlint-status.json").read_text())
+            rows["luxarch"] += 1
+    lint = json.loads((repo / ".luxlint-reds.json").read_text())
     for rule in lint["rules"]:
         if rule["status"] == "FAIL":
             reds[f"luxlint {rule['rule']}"] = "luxlint"
-    audit = json.loads((repo / ".luxaudit-status.json").read_text())
+            rows["luxlint"] += 1
+    audit = json.loads((repo / ".luxaudit-reds.json").read_text())
     if audit.get("error") or audit.get("errors"):
         problems.append(
             "luxaudit could not audit every dependency set, so no record can approve its leg: "
@@ -96,9 +113,11 @@ def guard_reds(repo: Path) -> tuple[dict[str, str], list[str]]:
         reds[f"luxaudit vulnerable {finding['package']} {finding['vuln_id']}"] = (
             "luxaudit"
         )
+        rows["luxaudit"] += 1
     for finding in audit["banned"]:
         name = finding["package"] if isinstance(finding, dict) else finding
         reds[f"luxaudit banned {name}"] = "luxaudit"
+        rows["luxaudit"] += 1
     for entry in audit["not_audited"]:
         name = (
             entry.get("entry", json.dumps(entry, sort_keys=True))
@@ -108,7 +127,7 @@ def guard_reds(repo: Path) -> tuple[dict[str, str], list[str]]:
         reds[f"luxaudit not-audited {name}"] = "luxaudit"
     for guard, status in (("luxarch", arch), ("luxlint", lint), ("luxaudit", audit)):
         counted = status.get("summary", {}).get("FAIL", 0)
-        named = sum(1 for g in reds.values() if g == guard)
+        named = rows[guard]
         if counted > named:
             problems.append(
                 f"{guard}'s status counts {counted} failure(s) but names {named} red(s) "
@@ -126,7 +145,7 @@ def leg_reds(leg: str, reds: dict[str, str]) -> list[str]:
     return [r for r, g in reds.items() if g == APPROVABLE[leg]]
 
 
-def judge(repo: Path, version: str, legs: list[str]) -> list[str]:
+def judge(repo: Path, version: str, legs: list[str], log: str) -> list[str]:
     """The problems that stop the release; none means the gate is met."""
     records, problems = known_reds((repo / "CHANGELOG.md").read_text(), version)
     if not legs:
@@ -140,6 +159,15 @@ def judge(repo: Path, version: str, legs: list[str]) -> list[str]:
         return problems + [
             f"make check failed in {' '.join(blocking)}, which no Known red can approve: fix it"
         ]
+    errors = leg_errors(log)
+    for leg in legs:
+        if errors.get(leg) != ["1"]:
+            problems.append(
+                f"make check's {leg} leg reached no verdict (make error {' '.join(errors.get(leg, [])) or 'not found'}, "
+                "not Error 1), so no record can approve it: make the guard run"
+            )
+    if problems:
+        return problems
     reds, unnamed = guard_reds(repo)
     problems += unnamed
     if "mypy" in legs:
@@ -164,7 +192,7 @@ def judge(repo: Path, version: str, legs: list[str]) -> list[str]:
 
 def main(argv: list[str]) -> int:
     version, legs = argv[1], argv[2:]
-    problems = judge(Path.cwd(), version, legs)
+    problems = judge(Path.cwd(), version, legs, sys.stdin.read())
     for problem in problems:
         print(f"release: {problem}", file=sys.stderr)
     if problems:

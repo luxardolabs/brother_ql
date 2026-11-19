@@ -1575,14 +1575,14 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 	set -e; D=$$(mktemp -d); L=$$(mktemp); R=$$(mktemp); trap 'rm -rf "$$D" "$$L" "$$R"' EXIT; trap 'rm -rf "$$D" "$$L" "$$R"; exit 130' $(RELEASE_SIGNALS); \
 	/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-clone.sh $(RELEASE_HEAD) "$$D"; \
 	cd "$$D"; \
-	{ rc=0; $(MAKE) --no-print-directory check || rc=$$?; echo $$rc > "$$R"; } 2>&1 | tee "$$L"; \
+	{ rc=0; LC_ALL=C LANGUAGE= $(MAKE) --no-print-directory check || rc=$$?; echo $$rc > "$$R"; } 2>&1 | tee "$$L"; \
 	legs=; \
 	if [ "$$(cat "$$R")" != 0 ]; then \
 	  legs=$$(LC_ALL=C sed -n 's/^✗ make check FAILED:\(.*\) (every leg ran.*/\1/p' "$$L"); \
 	  [ -n "$$legs" ] || { echo "release: make check stopped before its legs ran (a stale guard pin or a hollow scan), and no Known red approves that"; exit 1; }; \
-	  $(MAKE) --no-print-directory status >/dev/null; \
+	  $(MAKE) --no-print-directory release-reds; \
 	fi; \
-	docker run --rm -v "$$D":/repo:ro -w /repo -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) python3 -I scripts/release-known-reds.py $(RELEASE_VERSION) $$legs
+	docker run --rm -i -v "$$D":/repo:ro -w /repo -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) python3 -I scripts/release-known-reds.py $(RELEASE_VERSION) $$legs < "$$L"
 	@set -e; D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT; trap 'rm -rf "$$D"; exit 130' $(RELEASE_SIGNALS); \
 	/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-export.sh $(RELEASE_HEAD) "$$D"; \
 	$(call BUILD_ARTIFACTS,"$$D"); \
@@ -1645,6 +1645,17 @@ status: ## Regenerate committed guard-status files (.lux*-status.json) — commi
 	$(GUARD_RUN) -e LUXARCH_STATUS_WRITE=1 $(LUXARCH_IMAGE) --json > "$$C" || true; $(STAMP) "$$C" .luxarch-status.json; \
 	$(GUARD_RUN) $(LUXAUDIT_IMAGE) --json > "$$C" || true; $(STAMP) "$$C" .luxaudit-status.json; \
 	echo "wrote .lux*-status.json at $$SHA — commit them"
+
+# The reds `make release` judges in its clone of a red gate: each guard's --json run the way the
+# gate's legs run it (luxarch not in status-write mode, which makes repo.guard_status_current INERT),
+# into .lux*-reds.json. A guard that reaches no verdict (exit above 1, or no JSON) stops it.
+release-reds:
+	@$(REFUSE_OTHER_TREE)$(SKIP_NO_REGISTRY); \
+	set -e; trap 'exit 130' INT TERM HUP; \
+	for g in luxlint:$(LUXLINT_IMAGE) luxarch:$(LUXARCH_IMAGE) luxaudit:$(LUXAUDIT_IMAGE); do \
+	  rc=0; $(GUARD_RUN) $${g#*:} --json > ".$${g%%:*}-reds.json" || rc=$$?; \
+	  [ $$rc -le 1 ] && [ -s ".$${g%%:*}-reds.json" ] || { echo "release: $${g%%:*} --json reached no verdict (exit $$rc)"; exit 1; }; \
+	done
 
 # `docker pull` FIRST (per every guard's ONBOARDING): `docker run …:latest --version` alone
 # reads the LOCALLY-CACHED :latest, so a box that pulled weeks ago "confirms latest" while
@@ -1711,4 +1722,4 @@ help: ## Show this help
 	  /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 	@echo
 
-.PHONY: onboard-check onboard-guards honest lint mypy arch audit audit-lock format test release build build-lock build-pins status guard-version-check guard-upgrade help
+.PHONY: onboard-check onboard-guards honest lint mypy arch audit audit-lock format test release release-reds build build-lock build-pins status guard-version-check guard-upgrade help

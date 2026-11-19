@@ -34,9 +34,9 @@ def rule(name, status="PASS", **extra):
 
 
 def repo(tmp_path, reds="", arch=(), lint=(), vulnerable=()):
-    """A clone as the release judges it: its CHANGELOG and the guard status `make status` wrote."""
+    """A clone as the release judges it: its CHANGELOG and the guards' --json `make release-reds` wrote."""
     (tmp_path / "CHANGELOG.md").write_text(ENTRY.format(reds=reds))
-    (tmp_path / ".luxarch-status.json").write_text(
+    (tmp_path / ".luxarch-reds.json").write_text(
         json.dumps(
             {
                 "shared": {"rules": [rule("repo.fine"), *arch]},
@@ -44,30 +44,35 @@ def repo(tmp_path, reds="", arch=(), lint=(), vulnerable=()):
             }
         )
     )
-    (tmp_path / ".luxlint-status.json").write_text(
+    (tmp_path / ".luxlint-reds.json").write_text(
         json.dumps({"rules": [rule("lint.ruff"), *lint]})
     )
-    (tmp_path / ".luxaudit-status.json").write_text(
+    (tmp_path / ".luxaudit-reds.json").write_text(
         json.dumps({"vulnerable": list(vulnerable), "banned": [], "not_audited": []})
     )
     return tmp_path
+
+
+def verdicts(legs, code="1"):
+    """The gate's log as make prints it in the C locale: each failed leg's make error."""
+    return "".join(f"make[1]: *** [Makefile:381: {leg}] Error {code}\n" for leg in legs)
 
 
 RECORDED = "\n### Known reds\n\n- `luxarch repo.new_rule` — BROTHERQL-61: waits on the luxarch fix.\n"
 
 
 def test_a_green_gate_with_no_records_passes(tmp_path):
-    assert known.judge(repo(tmp_path), "2.1.0", []) == []
+    assert known.judge(repo(tmp_path), "2.1.0", [], verdicts([])) == []
 
 
 def test_a_recorded_red_with_its_issue_and_reason_passes(tmp_path):
     clone = repo(tmp_path, RECORDED, arch=[rule("repo.new_rule", "FAIL")])
-    assert known.judge(clone, "2.1.0", ["arch"]) == []
+    assert known.judge(clone, "2.1.0", ["arch"], verdicts(["arch"])) == []
 
 
 def test_an_unrecorded_red_stops_the_release(tmp_path):
     clone = repo(tmp_path, arch=[rule("repo.new_rule", "FAIL")])
-    problems = known.judge(clone, "2.1.0", ["arch"])
+    problems = known.judge(clone, "2.1.0", ["arch"], verdicts(["arch"]))
     assert problems == [
         "red, and not recorded under ### Known reds of 2.1.0: `luxarch repo.new_rule`"
     ]
@@ -75,7 +80,7 @@ def test_an_unrecorded_red_stops_the_release(tmp_path):
 
 def test_a_record_of_a_red_that_is_not_red_stops_the_release(tmp_path):
     clone = repo(tmp_path, RECORDED, lint=[rule("lint.format", "FAIL")])
-    problems = known.judge(clone, "2.1.0", ["lint"])
+    problems = known.judge(clone, "2.1.0", ["lint"], verdicts(["lint"]))
     assert (
         "red, and not recorded under ### Known reds of 2.1.0: `luxlint lint.format`"
         in problems
@@ -84,7 +89,7 @@ def test_a_record_of_a_red_that_is_not_red_stops_the_release(tmp_path):
 
 
 def test_a_green_gate_that_still_records_reds_stops_the_release(tmp_path):
-    problems = known.judge(repo(tmp_path, RECORDED), "2.1.0", [])
+    problems = known.judge(repo(tmp_path, RECORDED), "2.1.0", [], verdicts([]))
     assert len(problems) == 1
     assert problems[0].startswith("the gate is green, but 2.1.0 records a Known red")
 
@@ -99,13 +104,15 @@ def test_a_record_without_an_issue_or_a_reason_stops_the_release(tmp_path):
             f"\n### Known reds\n\n{record}\n",
             arch=[rule("repo.new_rule", "FAIL")],
         )
-        problems = known.judge(clone, "2.1.0", ["arch"])
+        problems = known.judge(clone, "2.1.0", ["arch"], verdicts(["arch"]))
         assert any("needs an issue key and why" in p for p in problems), record
 
 
 def test_a_failing_test_or_secret_scan_is_never_a_known_red(tmp_path):
     for leg in ("test", "gitleaks", "build-pins"):
-        problems = known.judge(repo(tmp_path, RECORDED), "2.1.0", ["arch", leg])
+        problems = known.judge(
+            repo(tmp_path, RECORDED), "2.1.0", ["arch", leg], verdicts(["arch", leg])
+        )
         assert (
             problems[-1]
             == f"make check failed in {leg}, which no Known red can approve: fix it"
@@ -113,7 +120,7 @@ def test_a_failing_test_or_secret_scan_is_never_a_known_red(tmp_path):
 
 
 def test_a_failed_guard_leg_whose_guard_names_no_red_stops_the_release(tmp_path):
-    problems = known.judge(repo(tmp_path), "2.1.0", ["audit"])
+    problems = known.judge(repo(tmp_path), "2.1.0", ["audit"], verdicts(["audit"]))
     assert problems == [
         "make check failed in audit, but luxaudit's status names no red to record"
     ]
@@ -128,12 +135,15 @@ def test_audit_findings_and_mypy_are_recorded_by_name(tmp_path):
     clone = repo(
         tmp_path, reds, vulnerable=[{"package": "pillow", "vuln_id": "PYSEC-2026-1"}]
     )
-    assert known.judge(clone, "2.1.0", ["audit", "mypy"]) == []
+    assert (
+        known.judge(clone, "2.1.0", ["audit", "mypy"], verdicts(["audit", "mypy"]))
+        == []
+    )
 
 
 def test_another_versions_records_are_not_this_ones(tmp_path):
     clone = repo(tmp_path, arch=[rule("repo.older_rule", "FAIL")])
-    problems = known.judge(clone, "2.1.0", ["arch"])
+    problems = known.judge(clone, "2.1.0", ["arch"], verdicts(["arch"]))
     assert problems == [
         "red, and not recorded under ### Known reds of 2.1.0: `luxarch repo.older_rule`"
     ]
@@ -144,11 +154,11 @@ def test_an_audit_that_could_not_run_stops_the_release_whatever_is_recorded(tmp_
     clone = repo(
         tmp_path, reds, vulnerable=[{"package": "pillow", "vuln_id": "PYSEC-2026-1"}]
     )
-    status = json.loads((clone / ".luxaudit-status.json").read_text())
+    status = json.loads((clone / ".luxaudit-reds.json").read_text())
     status["error"] = "requirements/missing.txt: no such file"
     status["summary"] = {"FAIL": 1}
-    (clone / ".luxaudit-status.json").write_text(json.dumps(status))
-    problems = known.judge(clone, "2.1.0", ["audit"])
+    (clone / ".luxaudit-reds.json").write_text(json.dumps(status))
+    problems = known.judge(clone, "2.1.0", ["audit"], verdicts(["audit"]))
     assert any("luxaudit could not audit" in p for p in problems), problems
 
 
@@ -158,10 +168,10 @@ def test_a_failure_the_judge_cannot_name_stops_the_release(tmp_path):
     clone = repo(
         tmp_path, reds, vulnerable=[{"package": "pillow", "vuln_id": "PYSEC-2026-1"}]
     )
-    status = json.loads((clone / ".luxaudit-status.json").read_text())
+    status = json.loads((clone / ".luxaudit-reds.json").read_text())
     status["summary"] = {"FAIL": 2}
-    (clone / ".luxaudit-status.json").write_text(json.dumps(status))
-    problems = known.judge(clone, "2.1.0", ["audit"])
+    (clone / ".luxaudit-reds.json").write_text(json.dumps(status))
+    problems = known.judge(clone, "2.1.0", ["audit"], verdicts(["audit"]))
     assert problems == [
         "luxaudit's status counts 2 failure(s) but names 1 red(s) a Known red can record: fix the rest"
     ]
@@ -169,7 +179,9 @@ def test_a_failure_the_judge_cannot_name_stops_the_release(tmp_path):
 
 def test_a_mypy_record_does_not_answer_a_failed_lint_leg(tmp_path):
     reds = "\n### Known reds\n\n- `luxlint mypy` — BROTHERQL-63: waits on a stub luxlint bakes.\n"
-    problems = known.judge(repo(tmp_path, reds), "2.1.0", ["lint", "mypy"])
+    problems = known.judge(
+        repo(tmp_path, reds), "2.1.0", ["lint", "mypy"], verdicts(["lint", "mypy"])
+    )
     assert (
         "make check failed in lint, but luxlint's status names no red to record"
         in problems
@@ -178,7 +190,39 @@ def test_a_mypy_record_does_not_answer_a_failed_lint_leg(tmp_path):
 
 def test_a_crashed_rule_is_a_red(tmp_path):
     clone = repo(tmp_path, arch=[rule("repo.flaky", "PASS", crashed=True)])
-    problems = known.judge(clone, "2.1.0", ["arch"])
+    problems = known.judge(clone, "2.1.0", ["arch"], verdicts(["arch"]))
     assert problems == [
         "red, and not recorded under ### Known reds of 2.1.0: `luxarch repo.flaky`"
     ]
+
+
+def test_a_leg_that_reached_no_verdict_stops_the_release_whatever_is_recorded(tmp_path):
+    # A guard that could not run, or a container killed at its memory cap, ends its leg in Error 2.
+    reds = "\n### Known reds\n\n- `luxlint mypy` — BROTHERQL-63: waits on a stub luxlint bakes.\n"
+    problems = known.judge(
+        repo(tmp_path, reds), "2.1.0", ["mypy"], verdicts(["mypy"], "2")
+    )
+    assert problems == [
+        "make check's mypy leg reached no verdict (make error 2, not Error 1), so no record can "
+        "approve it: make the guard run"
+    ]
+
+
+def test_a_leg_whose_error_is_not_in_the_gate_log_stops_the_release(tmp_path):
+    clone = repo(tmp_path, RECORDED, arch=[rule("repo.new_rule", "FAIL")])
+    problems = known.judge(clone, "2.1.0", ["arch"], "")
+    assert problems[0].startswith(
+        "make check's arch leg reached no verdict (make error not found"
+    )
+
+
+def test_one_rule_failing_in_two_targets_is_one_record(tmp_path):
+    clone = repo(tmp_path, RECORDED)
+    status = json.loads((clone / ".luxarch-reds.json").read_text())
+    status["targets"] = [
+        {"kind": "library", "rules": [rule("repo.new_rule", "FAIL")]},
+        {"kind": "library", "rules": [rule("repo.new_rule", "FAIL")]},
+    ]
+    status["summary"] = {"FAIL": 2}
+    (clone / ".luxarch-reds.json").write_text(json.dumps(status))
+    assert known.judge(clone, "2.1.0", ["arch"], verdicts(["arch"])) == []
