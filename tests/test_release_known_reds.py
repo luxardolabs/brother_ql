@@ -139,6 +139,43 @@ def test_another_versions_records_are_not_this_ones(tmp_path):
     ]
 
 
+def test_an_audit_that_could_not_run_stops_the_release_whatever_is_recorded(tmp_path):
+    reds = "\n### Known reds\n\n- `luxaudit vulnerable pillow PYSEC-2026-1` — BROTHERQL-62: no fix yet.\n"
+    clone = repo(
+        tmp_path, reds, vulnerable=[{"package": "pillow", "vuln_id": "PYSEC-2026-1"}]
+    )
+    status = json.loads((clone / ".luxaudit-status.json").read_text())
+    status["error"] = "requirements/missing.txt: no such file"
+    status["summary"] = {"FAIL": 1}
+    (clone / ".luxaudit-status.json").write_text(json.dumps(status))
+    problems = known.judge(clone, "2.1.0", ["audit"])
+    assert any("luxaudit could not audit" in p for p in problems), problems
+
+
+def test_a_failure_the_judge_cannot_name_stops_the_release(tmp_path):
+    # A stale [[ignore]] row counts as a luxaudit failure but is no finding to record: a deferral blocks.
+    reds = "\n### Known reds\n\n- `luxaudit vulnerable pillow PYSEC-2026-1` — BROTHERQL-62: no fix yet.\n"
+    clone = repo(
+        tmp_path, reds, vulnerable=[{"package": "pillow", "vuln_id": "PYSEC-2026-1"}]
+    )
+    status = json.loads((clone / ".luxaudit-status.json").read_text())
+    status["summary"] = {"FAIL": 2}
+    (clone / ".luxaudit-status.json").write_text(json.dumps(status))
+    problems = known.judge(clone, "2.1.0", ["audit"])
+    assert problems == [
+        "luxaudit's status counts 2 failure(s) but names 1 red(s) a Known red can record: fix the rest"
+    ]
+
+
+def test_a_mypy_record_does_not_answer_a_failed_lint_leg(tmp_path):
+    reds = "\n### Known reds\n\n- `luxlint mypy` — BROTHERQL-63: waits on a stub luxlint bakes.\n"
+    problems = known.judge(repo(tmp_path, reds), "2.1.0", ["lint", "mypy"])
+    assert (
+        "make check failed in lint, but luxlint's status names no red to record"
+        in problems
+    )
+
+
 def test_a_crashed_rule_is_a_red(tmp_path):
     clone = repo(tmp_path, arch=[rule("repo.flaky", "PASS", crashed=True)])
     problems = known.judge(clone, "2.1.0", ["arch"])

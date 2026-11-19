@@ -15,7 +15,9 @@ Fails:
   but the guard legs lint, mypy, arch and audit;
 - when a red is not recorded, or a record names no red (so the notes never list a red that shipped
   fixed), or a record has no issue key or no reason;
-- when a guard leg failed and its guard's status names no red to record;
+- when a guard leg failed and its guard's status names no red to record, when luxaudit could not
+  audit a dependency set, or when a guard counts more failures than reds it names (a stale or
+  expired ignore row is a deferral, which never ships);
 - when the gate is green and the entry still records reds.
 A red is named as `luxarch <rule>`, `luxlint <rule>`, `luxlint mypy`, `luxaudit vulnerable
 <package> <vuln_id>`, `luxaudit banned <package>` or `luxaudit not-audited <entry>`.
@@ -68,9 +70,12 @@ def known_reds(changelog: str, version: str) -> tuple[dict[str, str], list[str]]
     return records, malformed
 
 
-def guard_reds(repo: Path) -> dict[str, str]:
-    """Every red the three guards' status files name, keyed as the records name them."""
+def guard_reds(repo: Path) -> tuple[dict[str, str], list[str]]:
+    """Every red the three guards' status files name, keyed as the records name them, and the
+    problems that leave a red no record can approve: a scan that could not run, or a failure the
+    guard counts but names nothing for (a stale or expired ignore row is a deferral, and blocks)."""
     reds: dict[str, str] = {}
+    problems: list[str] = []
     arch = json.loads((repo / ".luxarch-status.json").read_text())
     for rule in arch["shared"]["rules"] + [
         r for t in arch["targets"] for r in t["rules"]
@@ -82,6 +87,11 @@ def guard_reds(repo: Path) -> dict[str, str]:
         if rule["status"] == "FAIL":
             reds[f"luxlint {rule['rule']}"] = "luxlint"
     audit = json.loads((repo / ".luxaudit-status.json").read_text())
+    if audit.get("error") or audit.get("errors"):
+        problems.append(
+            "luxaudit could not audit every dependency set, so no record can approve its leg: "
+            f"{audit.get('error') or audit.get('errors')}"
+        )
     for finding in audit["vulnerable"]:
         reds[f"luxaudit vulnerable {finding['package']} {finding['vuln_id']}"] = (
             "luxaudit"
@@ -96,7 +106,24 @@ def guard_reds(repo: Path) -> dict[str, str]:
             else entry
         )
         reds[f"luxaudit not-audited {name}"] = "luxaudit"
-    return reds
+    for guard, status in (("luxarch", arch), ("luxlint", lint), ("luxaudit", audit)):
+        counted = status.get("summary", {}).get("FAIL", 0)
+        named = sum(1 for g in reds.values() if g == guard)
+        if counted > named:
+            problems.append(
+                f"{guard}'s status counts {counted} failure(s) but names {named} red(s) "
+                "a Known red can record: fix the rest"
+            )
+    return reds, problems
+
+
+def leg_reds(leg: str, reds: dict[str, str]) -> list[str]:
+    """The reds a failed leg answers to: mypy's is its own, lint's are luxlint's rules."""
+    if leg == "mypy":
+        return [r for r in reds if r == "luxlint mypy"]
+    if leg == "lint":
+        return [r for r, g in reds.items() if g == "luxlint" and r != "luxlint mypy"]
+    return [r for r, g in reds.items() if g == APPROVABLE[leg]]
 
 
 def judge(repo: Path, version: str, legs: list[str]) -> list[str]:
@@ -113,11 +140,12 @@ def judge(repo: Path, version: str, legs: list[str]) -> list[str]:
         return problems + [
             f"make check failed in {' '.join(blocking)}, which no Known red can approve: fix it"
         ]
-    reds = guard_reds(repo)
+    reds, unnamed = guard_reds(repo)
+    problems += unnamed
     if "mypy" in legs:
         reds["luxlint mypy"] = "luxlint"
     for leg in legs:
-        if APPROVABLE[leg] not in reds.values():
+        if not leg_reds(leg, reds):
             problems.append(
                 f"make check failed in {leg}, but {APPROVABLE[leg]}'s status names no red to record"
             )
