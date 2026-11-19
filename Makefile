@@ -1554,7 +1554,7 @@ override PIN_BUILD_TOOLS = pip install -q --root-user-action=ignore --no-deps --
 # and the last line asks the preflight again before it tags and pushes that commit by name. A dry run
 # prints the gate where it stands, because a mirror need not hold the script or a repository to clone.
 # A red gate ships only as FLEET-RELEASE-PROCESS 0 allows: when only the guard legs (lint, mypy, arch,
-# audit) failed, the clone's `make status` names each red, and scripts/release-known-reds.py requires
+# audit) failed, each with a verdict, the clone's `make release-reds` names each red, and scripts/release-known-reds.py requires
 # every one recorded under `### Known reds` in this version's CHANGELOG.md entry with its issue and
 # reason, and no record of a red that is not red. A failing test, secret scan or build-pins, or a gate
 # stopped by a stale pin or a hollow scan, stops the release whatever is recorded.

@@ -32,7 +32,7 @@ Authorities, read them rather than this file when they disagree:
 
 1. **Write the `CHANGELOG.md` entry — now, from the complete window.** A new `## X.Y.Z — YYYY-MM-DD` section at the top, following the existing sections (Breaking, Features, Fixes, Refactors, Infra / Ops, Notes). Reference `BROTHERQL-NNN` liberally. Lead with **Breaking**, and say what a consumer must do to upgrade.
 
-1. **Meet the release gate** (`--doc FLEET-RELEASE-PROCESS` §0). `make check` green — or every remaining red is all four of: examined (you know why it is red), escalated (an open LuxPM issue: a guard escalation, or this repo's own issue), owner-approved to ship while red (ask the owner, one red per question, and record the answer on that issue), and recorded under a `### Known reds` heading of this version's changelog entry, one list item per red:
+1. **Meet the release gate** (`--doc FLEET-RELEASE-PROCESS` §0). `make check` green — or every remaining red is all four of: examined (you know why it is red), escalated (an open LuxPM issue: a guard escalation, or this repo's own issue), owner-approved to ship while red (ask the owner, one red per question, and record the answer on that issue), and recorded under a `### Known reds` heading of this version's changelog entry, one list item per red: the red in backticks, a dash, then the issue's `BROTHERQL-` key and why it is not fixable here:
 
    ```
    ### Known reds
@@ -40,7 +40,7 @@ Authorities, read them rather than this file when they disagree:
    - `luxarch repo.some_rule` — BROTHERQL-61: waits on the luxarch fix for …
    ```
 
-   Name each red exactly as `make release` reads it from the guards' status: `luxarch <rule>`, `luxlint <rule>`, `luxlint mypy`, `luxaudit vulnerable <package> <vuln_id>`, `luxaudit banned <package>` or `luxaudit not-audited <entry>` (`make status`, then the `FAIL` rows of the three `.lux*-status.json` files, list them). Before the release, read each named issue with `luxpm_get_context`: it is open and carries the owner's approval, or the red is not approved. Only the guard legs (`lint`, `mypy`, `arch`, `audit`) can be approved: a failing test, secret scan or `build-pins` is fixed, never recorded. A red that is merely deferred to green (`[rules.deferred]` / an allowlist) blocks the release. With a green gate the entry has no `### Known reds`.
+   Name each red exactly as `make release` reads it from the guards' status: `luxarch <rule>`, `luxlint <rule>`, `luxlint mypy`, `luxaudit vulnerable <package> <vuln_id>`, `luxaudit banned <package>` or `luxaudit not-audited <entry>` (`make release-reds`, then the `FAIL` rows and findings of the three `.lux*-reds.json` files it writes, list them; not `make status`, whose status-write luxarch run leaves `repo.guard_status_current` out). Before the release, read each named issue with `luxpm_get_context`: it is open and carries the owner's approval, or the red is not approved. Only the guard legs (`lint`, `mypy`, `arch`, `audit`) can be approved: a failing test, secret scan or `build-pins` is fixed, never recorded. A red that is merely deferred to green (`[rules.deferred]` / an allowlist) blocks the release. With a green gate the entry has no `### Known reds`.
 
 1. **Commit** the `VERSION` bump + changelog together: `git add -A && git commit`.
 

@@ -36,6 +36,7 @@ def rule(name, status="PASS", **extra):
 def repo(tmp_path, reds="", arch=(), lint=(), vulnerable=()):
     """A clone as the release judges it: its CHANGELOG and the guards' --json `make release-reds` wrote."""
     (tmp_path / "CHANGELOG.md").write_text(ENTRY.format(reds=reds))
+    (tmp_path / ".luxpm-receipt").write_text("version: 1\nproject: BROTHERQL\n")
     (tmp_path / ".luxarch-reds.json").write_text(
         json.dumps(
             {
@@ -105,7 +106,9 @@ def test_a_record_without_an_issue_or_a_reason_stops_the_release(tmp_path):
             arch=[rule("repo.new_rule", "FAIL")],
         )
         problems = known.judge(clone, "2.1.0", ["arch"], verdicts(["arch"]))
-        assert any("needs an issue key and why" in p for p in problems), record
+        assert any("needs an issue key of BROTHERQL and why" in p for p in problems), (
+            record
+        )
 
 
 def test_a_failing_test_or_secret_scan_is_never_a_known_red(tmp_path):
@@ -226,3 +229,24 @@ def test_one_rule_failing_in_two_targets_is_one_record(tmp_path):
     status["summary"] = {"FAIL": 2}
     (clone / ".luxarch-reds.json").write_text(json.dumps(status))
     assert known.judge(clone, "2.1.0", ["arch"], verdicts(["arch"])) == []
+
+
+def test_a_leg_error_as_make_4_1_prints_it_is_a_verdict(tmp_path):
+    # GNU make before 4.2 names the failed target without its Makefile line.
+    clone = repo(tmp_path, RECORDED, arch=[rule("repo.new_rule", "FAIL")])
+    log = "Makefile:394: recipe for target 'arch' failed\nmake[1]: *** [arch] Error 1\n"
+    assert known.judge(clone, "2.1.0", ["arch"], log) == []
+
+
+def test_the_issue_key_is_the_one_after_the_dash_not_a_cve_in_the_reason(tmp_path):
+    reds = (
+        "\n### Known reds\n\n- `luxaudit vulnerable pillow GHSA-1` — CVE-2026-12345, "
+        "no fix released upstream yet.\n"
+    )
+    clone = repo(
+        tmp_path, reds, vulnerable=[{"package": "pillow", "vuln_id": "GHSA-1"}]
+    )
+    problems = known.judge(clone, "2.1.0", ["audit"], verdicts(["audit"]))
+    assert any("needs an issue key of BROTHERQL and why" in p for p in problems), (
+        problems
+    )

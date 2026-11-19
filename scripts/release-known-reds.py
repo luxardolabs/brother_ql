@@ -7,7 +7,7 @@ that check named as failed (none when it was green), the gate's own log on stdin
 red, the guards' `--json` of that clone (`make release-reds`: .lux*-reds.json, written the way the
 gate's legs run, not in status-write mode, which hides repo.guard_status_current). A release may ship over a red only when the red is recorded in
 the version's CHANGELOG.md entry, under `### Known reds`, as a list item naming the red, the issue
-that tracks it and why it cannot be fixed here:
+of this repo's LuxPM project (.luxpm-receipt) that tracks it, and why it cannot be fixed here:
 
     - `luxarch repo.some_rule` - BROTHERQL-61: waits on the luxarch fix for ...
 
@@ -37,12 +37,26 @@ APPROVABLE = {
     "arch": "luxarch",
     "audit": "luxaudit",
 }
-ISSUE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 RECORD = re.compile(r"^- `([^`]+)`\s*(?:-|—|–)\s*(.*)$")
-LEG_ERROR = re.compile(r"^make\[\d+\]: \*\*\* \[Makefile:\d+: ([\w-]+)\] Error (\d+)$")
+# GNU make 4.2 and later name the target as `Makefile:N: leg`; earlier releases as `leg`.
+LEG_ERROR = re.compile(
+    r"^make\[\d+\]: \*\*\* \[(?:[^\]:]+:\d+: )?([\w-]+)\] Error (\d+)$"
+)
 
 
-def known_reds(changelog: str, version: str) -> tuple[dict[str, str], list[str]]:
+def project_of(repo: Path) -> str:
+    """This repo's LuxPM project, as its committed sync receipt names it."""
+    receipt = repo / ".luxpm-receipt"
+    if receipt.is_file():
+        for line in receipt.read_text().splitlines():
+            if line.startswith("project:"):
+                return line.split(":", 1)[1].strip()
+    return ""
+
+
+def known_reds(
+    changelog: str, version: str, project: str
+) -> tuple[dict[str, str], list[str]]:
     """The records of the version's `### Known reds`, and the lines in it that are not records."""
     records: dict[str, str] = {}
     malformed: list[str] = []
@@ -64,11 +78,13 @@ def known_reds(changelog: str, version: str) -> tuple[dict[str, str], list[str]]
             malformed.append(f"not a record: {line}")
             continue
         red, rest = match.group(1).strip(), match.group(2)
-        issue = ISSUE.search(rest)
+        # The key opens the text after the dash and is an issue of this repo's project, where the
+        # fleet files a Known red's escalation or ticket; an advisory id (CVE-2026-1) is no key.
+        issue = re.match(rf"{re.escape(project)}-\d+\b", rest) if project else None
         reason = rest[issue.end() :].lstrip(" :—–-").strip() if issue else ""
         if not issue or not reason:
             malformed.append(
-                f"needs an issue key and why it is not fixable here: {line}"
+                f"needs an issue key of {project or 'this repo'} and why it is not fixable here: {line}"
             )
         records[red] = line
     return records, malformed
@@ -147,7 +163,9 @@ def leg_reds(leg: str, reds: dict[str, str]) -> list[str]:
 
 def judge(repo: Path, version: str, legs: list[str], log: str) -> list[str]:
     """The problems that stop the release; none means the gate is met."""
-    records, problems = known_reds((repo / "CHANGELOG.md").read_text(), version)
+    records, problems = known_reds(
+        (repo / "CHANGELOG.md").read_text(), version, project_of(repo)
+    )
     if not legs:
         problems += [
             f"the gate is green, but {version} records a Known red: {r}"
