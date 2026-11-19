@@ -142,11 +142,21 @@ def test_the_gate_runs_in_a_fresh_clone_of_the_judged_commit():
         line for line in recipe("release") if "scripts/release-clone.sh" in line
     )
     clone = gate.index('/bin/sh scripts/release-clone.sh $(RELEASE_HEAD) "$$D"')
-    # The verdict is the shell's last word, and set -e stops a clone that failed from reaching it.
+    # set -e stops a clone that failed before the gate, and the verdict is the Known-reds judge's.
     assert "set -e; D=$$(mktemp -d)" in gate
-    # The guards read these words as make's arguments, so a closing bracket here hollows their rules.
-    assert gate.endswith('cd "$$D"; $(MAKE) --no-print-directory check')
-    assert clone < gate.rindex("$(MAKE)")
+    run = gate.index(
+        '{ $(MAKE) --no-print-directory check; echo $$? > "$$R"; } 2>&1 | tee "$$L";'
+    )
+    assert clone < run
+    assert gate.endswith(
+        "python3 -I scripts/release-known-reds.py $(RELEASE_VERSION) $$legs"
+    )
+    # A red gate is judged only once its legs ran, and from the status of the clone it judged.
+    assert (
+        '[ -n "$$legs" ] || { echo "release: make check stopped before its legs ran'
+        in gate
+    )
+    assert gate.index("$(MAKE) --no-print-directory status") > run
     assert "PATH=/usr/bin:/bin" in gate[:clone]
     # Only a dry run judges where it stands, and it leaves before the clone.
     assert gate.startswith(
@@ -265,7 +275,8 @@ def test_an_interrupt_stops_the_recipe_shell():
     for signal in ("INT", "TERM", "HUP", "QUIT", "USR1", "ALRM", "PIPE", "XCPU"):
         assert signal in signals
     assert 'trap \'rm -rf "$$N" "$$U"; exit 130\' $(RELEASE_SIGNALS)' in text
-    assert text.count("trap 'rm -rf \"$$D\"; exit 130' $(RELEASE_SIGNALS)") == 2
+    assert text.count("trap 'rm -rf \"$$D\"; exit 130' $(RELEASE_SIGNALS)") == 1
+    assert 'trap \'rm -rf "$$D" "$$L" "$$R"; exit 130\' $(RELEASE_SIGNALS)' in text
     assert "EXIT INT TERM" not in text
     # From the tag on, the notes stay for the command that finishes the Release.
     assert text.index("trap - EXIT;") < text.index("git tag --no-sign")

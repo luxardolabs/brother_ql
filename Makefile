@@ -1553,6 +1553,11 @@ override PIN_BUILD_TOOLS = pip install -q --root-user-action=ignore --no-deps --
 # and the artifacts are built from a raw export of it, so no filter or ignored file can reach either,
 # and the last line asks the preflight again before it tags and pushes that commit by name. A dry run
 # prints the gate where it stands, because a mirror need not hold the script or a repository to clone.
+# A red gate ships only as FLEET-RELEASE-PROCESS 0 allows: when only the guard legs (lint, mypy, arch,
+# audit) failed, the clone's `make status` names each red, and scripts/release-known-reds.py requires
+# every one recorded under `### Known reds` in this version's CHANGELOG.md entry with its issue and
+# reason, and no record of a red that is not red. A failing test, secret scan or build-pins, or a gate
+# stopped by a stale pin or a hollow scan, stops the release whatever is recorded.
 # The sub-make stays on a line of its own, whose words the guards read as make's arguments. The tag is
 # never signed, because a signature carries the signer's address past the tagger check. From the
 # tag on, an interrupt keeps the notes and says how to finish.
@@ -1567,10 +1572,17 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 	fi; \
 	[ -z "$$($(RELEASE_GIT) ls-remote --tags origin refs/tags/v$(RELEASE_VERSION))" ] || { echo "release: tag v$(RELEASE_VERSION) already exists on origin"; exit 1; }
 	@case '$(filter-out -%,$(firstword $(MAKEFLAGS)))' in *n*) exec $(MAKE) --no-print-directory check;; esac; \
-	set -e; D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT; trap 'rm -rf "$$D"; exit 130' $(RELEASE_SIGNALS); \
+	set -e; D=$$(mktemp -d); L=$$(mktemp); R=$$(mktemp); trap 'rm -rf "$$D" "$$L" "$$R"' EXIT; trap 'rm -rf "$$D" "$$L" "$$R"; exit 130' $(RELEASE_SIGNALS); \
 	/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-clone.sh $(RELEASE_HEAD) "$$D"; \
 	cd "$$D"; \
-	$(MAKE) --no-print-directory check
+	{ $(MAKE) --no-print-directory check; echo $$? > "$$R"; } 2>&1 | tee "$$L"; \
+	legs=; \
+	if [ "$$(cat "$$R")" != 0 ]; then \
+	  legs=$$(LC_ALL=C sed -n 's/^✗ make check FAILED:\(.*\) (every leg ran.*/\1/p' "$$L"); \
+	  [ -n "$$legs" ] || { echo "release: make check stopped before its legs ran (a stale guard pin or a hollow scan), and no Known red approves that"; exit 1; }; \
+	  $(MAKE) --no-print-directory status >/dev/null; \
+	fi; \
+	docker run --rm -v "$$D":/repo:ro -w /repo -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) python3 -I scripts/release-known-reds.py $(RELEASE_VERSION) $$legs
 	@set -e; D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT; trap 'rm -rf "$$D"; exit 130' $(RELEASE_SIGNALS); \
 	/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-export.sh $(RELEASE_HEAD) "$$D"; \
 	$(call BUILD_ARTIFACTS,"$$D"); \

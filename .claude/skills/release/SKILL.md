@@ -23,14 +23,31 @@ Authorities, read them rather than this file when they disagree:
 ## Steps — do every one, in order
 
 1. **Preconditions.** Clean tree, on `main`, `git fetch origin` done. If the local history is not a descendant of `origin/main`, resolve that first — never force-push over published history.
+
 1. **Decide the version — SemVer, not CalVer.** MAJOR for a breaking API or a raised Python floor, MINOR for additive features, PATCH for fixes. Write it to `VERSION`.
+
 1. **Gather the window.** `git fetch --tags`, then `git log --no-merges v<previous>..HEAD --pretty=format:'%h %s'` and `git diff --stat v<previous>..HEAD`. On the first tagged release the window is the whole history. Note the `BROTHERQL-NNN` ids referenced.
+
 1. **Reconcile LuxPM (audit open → closed).** `luxpm_list_issues` for `todo` / `in_progress` / `on_hold`; for each, decide whether it shipped in this window. Close the shipped ones with a `close_summary` naming the commit; leave the rest open; reverse-check that every issue id in a commit resolves to a closed issue. The closed-this-window set is the **Issues Closed** material.
+
 1. **Write the `CHANGELOG.md` entry — now, from the complete window.** A new `## X.Y.Z — YYYY-MM-DD` section at the top, following the existing sections (Breaking, Features, Fixes, Refactors, Infra / Ops, Notes). Reference `BROTHERQL-NNN` liberally. Lead with **Breaking**, and say what a consumer must do to upgrade.
-1. **Meet the release gate** (`--doc FLEET-RELEASE-PROCESS` §0). `make check` green — or every remaining red is examined, escalated as a tracked issue, owner-approved, and recorded in a `## Known reds` section of the changelog entry. A red that is merely deferred to green (`[rules.deferred]` / an allowlist) blocks the release.
+
+1. **Meet the release gate** (`--doc FLEET-RELEASE-PROCESS` §0). `make check` green — or every remaining red is all four of: examined (you know why it is red), escalated (an open LuxPM issue: a guard escalation, or this repo's own issue), owner-approved to ship while red (ask the owner, one red per question, and record the answer on that issue), and recorded under a `### Known reds` heading of this version's changelog entry, one list item per red:
+
+   ```
+   ### Known reds
+
+   - `luxarch repo.some_rule` — BROTHERQL-61: waits on the luxarch fix for …
+   ```
+
+   Name each red exactly as `make release` reads it from the guards' status: `luxarch <rule>`, `luxlint <rule>`, `luxlint mypy`, `luxaudit vulnerable <package> <vuln_id>`, `luxaudit banned <package>` or `luxaudit not-audited <entry>` (`make status`, then the `FAIL` rows of the three `.lux*-status.json` files, list them). Before the release, read each named issue with `luxpm_get_context`: it is open and carries the owner's approval, or the red is not approved. Only the guard legs (`lint`, `mypy`, `arch`, `audit`) can be approved: a failing test, secret scan or `build-pins` is fixed, never recorded. A red that is merely deferred to green (`[rules.deferred]` / an allowlist) blocks the release. With a green gate the entry has no `### Known reds`.
+
 1. **Commit** the `VERSION` bump + changelog together: `git add -A && git commit`.
-1. **Release**: `make release`, bare, on Linux: `scripts/release-preflight.sh` refuses any argument (`make -n release` is the dry run), anything in the environment that would steer make, git, gh or docker, a `Makefile.local` setting more than `LUX_REGISTRY` and `HEAVY_*`, a dirty tree, a branch other than `main`, a git identity other than the fleet account, and a missing changelog entry. It also stops if the checkout is behind `origin` or if the commit moves during the gate. It runs `make check` in a fresh clone of the commit, builds the sdist + wheel from a raw export of it, creates the annotated `v$(VERSION)` tag, pushes the branch and the tag, and creates the **GitHub Release** with that version's changelog section as the notes and the artifacts attached. It stops on any red in `make check`, the approved reds of the step above included: the recipe has no route for one. A tag with no Release is half a release.
+
+1. **Release**: `make release`, bare, on Linux: `scripts/release-preflight.sh` refuses any argument (`make -n release` is the dry run), anything in the environment that would steer make, git, gh or docker, a `Makefile.local` setting more than `LUX_REGISTRY` and `HEAVY_*`, a dirty tree, a branch other than `main`, a git identity other than the fleet account, and a missing changelog entry. It also stops if the checkout is behind `origin` or if the commit moves during the gate. It runs `make check` in a fresh clone of the commit, builds the sdist + wheel from a raw export of it, creates the annotated `v$(VERSION)` tag, pushes the branch and the tag, and creates the **GitHub Release** with that version's changelog section as the notes and the artifacts attached. When the clone's `make check` is red, it stops unless only the guard legs failed and every red the clone's guard status names is recorded under `### Known reds` of this version, with its issue and reason, and nothing recorded is not red (`scripts/release-known-reds.py`). It does not read LuxPM, so the owner's approval is the step above's. A tag with no Release is half a release.
+
 1. **Mirror to LuxPM** (the fleet index): `luxpm_create_release(project_id=<BROTHERQL>, version="X.Y.Z", status="released", release_date=<today>, changelog_md=<the CHANGELOG section body>)`. A mirror of the GitHub Release, not a substitute for it.
+
 1. **Log it.** A final activity on the issues this release shipped, carrying the tag and the gate numbers.
 
 ## Done when
