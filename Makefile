@@ -1575,7 +1575,7 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 	set -e; D=$$(mktemp -d); L=$$(mktemp); R=$$(mktemp); trap 'rm -rf "$$D" "$$L" "$$R"' EXIT; trap 'rm -rf "$$D" "$$L" "$$R"; exit 130' $(RELEASE_SIGNALS); \
 	/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-clone.sh $(RELEASE_HEAD) "$$D"; \
 	cd "$$D"; \
-	{ $(MAKE) --no-print-directory check; echo $$? > "$$R"; } 2>&1 | tee "$$L"; \
+	{ rc=0; $(MAKE) --no-print-directory check || rc=$$?; echo $$rc > "$$R"; } 2>&1 | tee "$$L"; \
 	legs=; \
 	if [ "$$(cat "$$R")" != 0 ]; then \
 	  legs=$$(LC_ALL=C sed -n 's/^✗ make check FAILED:\(.*\) (every leg ran.*/\1/p' "$$L"); \

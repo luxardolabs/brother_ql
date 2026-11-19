@@ -26,14 +26,20 @@ import re
 import sys
 from pathlib import Path
 
-APPROVABLE = {"lint": "luxlint", "mypy": "luxlint", "arch": "luxarch", "audit": "luxaudit"}
+APPROVABLE = {
+    "lint": "luxlint",
+    "mypy": "luxlint",
+    "arch": "luxarch",
+    "audit": "luxaudit",
+}
 ISSUE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 RECORD = re.compile(r"^- `([^`]+)`\s*(?:-|—|–)\s*(.*)$")
 
 
-def known_reds(changelog, version):
+def known_reds(changelog: str, version: str) -> tuple[dict[str, str], list[str]]:
     """The records of the version's `### Known reds`, and the lines in it that are not records."""
-    records, malformed = {}, []
+    records: dict[str, str] = {}
+    malformed: list[str] = []
     in_entry = in_reds = False
     for line in changelog.splitlines():
         if line.startswith("## "):
@@ -55,16 +61,20 @@ def known_reds(changelog, version):
         issue = ISSUE.search(rest)
         reason = rest[issue.end() :].lstrip(" :—–-").strip() if issue else ""
         if not issue or not reason:
-            malformed.append(f"needs an issue key and why it is not fixable here: {line}")
+            malformed.append(
+                f"needs an issue key and why it is not fixable here: {line}"
+            )
         records[red] = line
     return records, malformed
 
 
-def guard_reds(repo):
+def guard_reds(repo: Path) -> dict[str, str]:
     """Every red the three guards' status files name, keyed as the records name them."""
-    reds = {}
+    reds: dict[str, str] = {}
     arch = json.loads((repo / ".luxarch-status.json").read_text())
-    for rule in arch["shared"]["rules"] + [r for t in arch["targets"] for r in t["rules"]]:
+    for rule in arch["shared"]["rules"] + [
+        r for t in arch["targets"] for r in t["rules"]
+    ]:
         if rule["status"] == "FAIL" or rule.get("crashed"):
             reds[f"luxarch {rule['rule']}"] = "luxarch"
     lint = json.loads((repo / ".luxlint-status.json").read_text())
@@ -73,21 +83,30 @@ def guard_reds(repo):
             reds[f"luxlint {rule['rule']}"] = "luxlint"
     audit = json.loads((repo / ".luxaudit-status.json").read_text())
     for finding in audit["vulnerable"]:
-        reds[f"luxaudit vulnerable {finding['package']} {finding['vuln_id']}"] = "luxaudit"
+        reds[f"luxaudit vulnerable {finding['package']} {finding['vuln_id']}"] = (
+            "luxaudit"
+        )
     for finding in audit["banned"]:
         name = finding["package"] if isinstance(finding, dict) else finding
         reds[f"luxaudit banned {name}"] = "luxaudit"
     for entry in audit["not_audited"]:
-        name = entry.get("entry", json.dumps(entry, sort_keys=True)) if isinstance(entry, dict) else entry
+        name = (
+            entry.get("entry", json.dumps(entry, sort_keys=True))
+            if isinstance(entry, dict)
+            else entry
+        )
         reds[f"luxaudit not-audited {name}"] = "luxaudit"
     return reds
 
 
-def judge(repo, version, legs):
+def judge(repo: Path, version: str, legs: list[str]) -> list[str]:
     """The problems that stop the release; none means the gate is met."""
     records, problems = known_reds((repo / "CHANGELOG.md").read_text(), version)
     if not legs:
-        problems += [f"the gate is green, but {version} records a Known red: {r}" for r in records]
+        problems += [
+            f"the gate is green, but {version} records a Known red: {r}"
+            for r in records
+        ]
         return problems
     blocking = [leg for leg in legs if leg not in APPROVABLE]
     if blocking:
@@ -99,13 +118,23 @@ def judge(repo, version, legs):
         reds["luxlint mypy"] = "luxlint"
     for leg in legs:
         if APPROVABLE[leg] not in reds.values():
-            problems.append(f"make check failed in {leg}, but {APPROVABLE[leg]}'s status names no red to record")
-    problems += [f"red, and not recorded under ### Known reds of {version}: `{r}`" for r in sorted(reds) if r not in records]
-    problems += [f"recorded under ### Known reds of {version}, but not red: {records[r]}" for r in sorted(records) if r not in reds]
+            problems.append(
+                f"make check failed in {leg}, but {APPROVABLE[leg]}'s status names no red to record"
+            )
+    problems += [
+        f"red, and not recorded under ### Known reds of {version}: `{r}`"
+        for r in sorted(reds)
+        if r not in records
+    ]
+    problems += [
+        f"recorded under ### Known reds of {version}, but not red: {records[r]}"
+        for r in sorted(records)
+        if r not in reds
+    ]
     return problems
 
 
-def main(argv):
+def main(argv: list[str]) -> int:
     version, legs = argv[1], argv[2:]
     problems = judge(Path.cwd(), version, legs)
     for problem in problems:
@@ -113,7 +142,9 @@ def main(argv):
     if problems:
         return 1
     if legs:
-        print(f"release: every red is a Known red of {version}, each with its issue and reason")
+        print(
+            f"release: every red is a Known red of {version}, each with its issue and reason"
+        )
     return 0
 
 

@@ -144,8 +144,9 @@ def test_the_gate_runs_in_a_fresh_clone_of_the_judged_commit():
     clone = gate.index('/bin/sh scripts/release-clone.sh $(RELEASE_HEAD) "$$D"')
     # set -e stops a clone that failed before the gate, and the verdict is the Known-reds judge's.
     assert "set -e; D=$$(mktemp -d)" in gate
+    # The gate's own status is recorded whatever set -e would do to the pipeline's group.
     run = gate.index(
-        '{ $(MAKE) --no-print-directory check; echo $$? > "$$R"; } 2>&1 | tee "$$L";'
+        '{ rc=0; $(MAKE) --no-print-directory check || rc=$$?; echo $$rc > "$$R"; } 2>&1 | tee "$$L";'
     )
     assert clone < run
     assert gate.endswith(
