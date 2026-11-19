@@ -1557,7 +1557,8 @@ override PIN_BUILD_TOOLS = pip install -q --root-user-action=ignore --no-deps --
 # audit) failed, each with a verdict, the clone's `make release-reds` names each red, and scripts/release-known-reds.py requires
 # every one recorded under `### Known reds` in this version's CHANGELOG.md entry with its issue and
 # reason, and no record of a red that is not red. A failing test, secret scan or build-pins, or a gate
-# stopped by a stale pin or a hollow scan, stops the release whatever is recorded.
+# stopped by a stale pin or a hollow scan, stops the release whatever is recorded. On every gate,
+# green or red, a red a guard defers to green (a deferred or XFAIL rule, an ignore row) stops it.
 # The sub-make stays on a line of its own, whose words the guards read as make's arguments. The tag is
 # never signed, because a signature carries the signer's address past the tagger check. From the
 # tag on, an interrupt keeps the notes and says how to finish.
@@ -1580,8 +1581,8 @@ release: ## Tag, push, build and publish the GitHub Release for the VERSION file
 	if [ "$$(cat "$$R")" != 0 ]; then \
 	  legs=$$(LC_ALL=C sed -n 's/^✗ make check FAILED:\(.*\) (every leg ran.*/\1/p' "$$L"); \
 	  [ -n "$$legs" ] || { echo "release: make check stopped before its legs ran (a stale guard pin or a hollow scan), and no Known red approves that"; exit 1; }; \
-	  $(MAKE) --no-print-directory release-reds; \
 	fi; \
+	$(MAKE) --no-print-directory release-reds; \
 	docker run --rm -i -v "$$D":/repo:ro -w /repo -e PYTHONDONTWRITEBYTECODE=1 $(TAIL_IMAGE) python3 -I scripts/release-known-reds.py $(RELEASE_VERSION) $$legs < "$$L"
 	@set -e; D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT; trap 'rm -rf "$$D"; exit 130' $(RELEASE_SIGNALS); \
 	/usr/bin/env -i HOME="$$HOME" XDG_CONFIG_HOME="$$XDG_CONFIG_HOME" PATH=/usr/bin:/bin LC_ALL=C /bin/sh scripts/release-export.sh $(RELEASE_HEAD) "$$D"; \

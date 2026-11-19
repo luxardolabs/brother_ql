@@ -3,8 +3,8 @@
 Usage: release-known-reds.py <version> [failed leg ...] < <the gate's log>
 
 Run by `make release` in the fresh clone of the judged commit, after its `make check`, with the legs
-that check named as failed (none when it was green), the gate's own log on stdin and, when it was
-red, the guards' `--json` of that clone (`make release-reds`: .lux*-reds.json, written the way the
+that check named as failed (none when it was green), the gate's own log on stdin, and
+the guards' `--json` of that clone (`make release-reds`: .lux*-reds.json, written the way the
 gate's legs run, not in status-write mode, which hides repo.guard_status_current). A release may ship over a red only when the red is recorded in
 the version's CHANGELOG.md entry, under `### Known reds`, as a list item naming the red, the issue
 of this repo's LuxPM project (.luxpm-receipt) that tracks it, and why it cannot be fixed here:
@@ -21,7 +21,9 @@ Fails:
 - when a guard leg failed and its guard's status names no red to record, when luxaudit could not
   audit a dependency set, or when a guard counts more failures than reds it names (a stale or
   expired ignore row is a deferral, which never ships);
-- when the gate is green and the entry still records reds.
+- when the gate is green and the entry still records reds;
+- whenever a guard defers a red to green (a deferred or XFAIL rule, a luxaudit finding an ignore
+  row answers), green gate or red: the release gate takes a red escalated, never deferred.
 A red is named as `luxarch <rule>`, `luxlint <rule>`, `luxlint mypy`, `luxaudit vulnerable
 <package> <vuln_id>`, `luxaudit banned <package>` or `luxaudit not-audited <entry>`.
 """
@@ -161,11 +163,45 @@ def leg_reds(leg: str, reds: dict[str, str]) -> list[str]:
     return [r for r, g in reds.items() if g == APPROVABLE[leg]]
 
 
+def deferrals(repo: Path) -> list[str]:
+    """Every red a guard defers to green: a deferred or XFAIL rule, a luxaudit finding an ignore
+    row answers. The gate passes over each one, and none is a release state (FLEET-RELEASE-PROCESS 0)."""
+    found: list[str] = []
+    for guard in ("luxarch", "luxlint"):
+        status = json.loads((repo / f".{guard}-reds.json").read_text())
+        rules = status.get("rules", [])
+        if guard == "luxarch":
+            rules = status["shared"]["rules"] + [
+                r for t in status["targets"] for r in t["rules"]
+            ]
+        found += sorted(
+            {
+                f"{guard} defers `{r['rule']}`"
+                for r in rules
+                if r.get("deferred") or r["status"] == "XFAIL"
+            }
+        )
+    audit = json.loads((repo / ".luxaudit-reds.json").read_text())
+    found += [
+        f"luxaudit defers `{f['package']} {f['vuln_id']}`"
+        if isinstance(f, dict)
+        else f"luxaudit defers `{f}`"
+        for f in audit.get("deferred", [])
+    ]
+    if not audit.get("deferred") and audit.get("summary", {}).get("XFAIL", 0):
+        found.append("luxaudit defers findings its status counts as XFAIL")
+    return [
+        f"{d} to green, and a deferral never ships: fix it or escalate it as a Known red"
+        for d in found
+    ]
+
+
 def judge(repo: Path, version: str, legs: list[str], log: str) -> list[str]:
     """The problems that stop the release; none means the gate is met."""
     records, problems = known_reds(
         (repo / "CHANGELOG.md").read_text(), version, project_of(repo)
     )
+    problems += deferrals(repo)
     if not legs:
         problems += [
             f"the gate is green, but {version} records a Known red: {r}"

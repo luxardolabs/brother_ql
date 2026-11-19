@@ -250,3 +250,26 @@ def test_the_issue_key_is_the_one_after_the_dash_not_a_cve_in_the_reason(tmp_pat
     assert any("needs an issue key of BROTHERQL and why" in p for p in problems), (
         problems
     )
+
+
+def test_a_rule_deferred_to_green_stops_a_green_release(tmp_path):
+    for status, extra in (("XFAIL", {}), ("PASS", {"deferred": True})):
+        (tmp_path / status).mkdir()
+        clone = repo(tmp_path / status, arch=[rule("repo.parked", status, **extra)])
+        problems = known.judge(clone, "2.1.0", [], "")
+        assert problems == [
+            "luxarch defers `repo.parked` to green, and a deferral never ships: fix it or "
+            "escalate it as a Known red"
+        ], status
+
+
+def test_a_luxaudit_finding_answered_by_an_ignore_row_stops_the_release(tmp_path):
+    clone = repo(tmp_path)
+    status = json.loads((clone / ".luxaudit-reds.json").read_text())
+    status["deferred"] = [{"package": "pillow", "vuln_id": "PYSEC-2026-2"}]
+    (clone / ".luxaudit-reds.json").write_text(json.dumps(status))
+    problems = known.judge(clone, "2.1.0", [], "")
+    assert problems == [
+        "luxaudit defers `pillow PYSEC-2026-2` to green, and a deferral never ships: fix it or "
+        "escalate it as a Known red"
+    ]

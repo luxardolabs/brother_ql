@@ -160,6 +160,8 @@ def test_the_gate_runs_in_a_fresh_clone_of_the_judged_commit():
         in gate
     )
     assert gate.index("$(MAKE) --no-print-directory release-reds") > run
+    # On every gate, green too, so a red deferred to green is judged.
+    assert "fi; $(MAKE) --no-print-directory release-reds;" in gate
     assert "LUXARCH_STATUS_WRITE" not in "\n".join(recipe("release-reds"))
     assert "PATH=/usr/bin:/bin" in gate[:clone]
     # Only a dry run judges where it stands, and it leaves before the clone.
